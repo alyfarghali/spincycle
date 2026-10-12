@@ -411,28 +411,41 @@ Secrets only from `.env` on the server; commit `.env.example`. Never commit cred
 CI on every PR: lint + unit tests per service; integration test (PG, Redis, Mosquitto as service containers; publish a fake reading; assert via `GET /api/machines/{id}`); firmware build in the ESP-IDF Docker image (Twyla); build images.
 Deploy on merge to main: build → push GHCR → SSH → `docker compose pull && docker compose up -d`. Manual first.
 Observability: JSON logs with `device_id`; Prometheus metrics from ingest and API; external uptime check on `/health`; nightly `pg_dump` off-box, restore tested once.
-Mosquitto needs the TLS cert Caddy obtains — mount Caddy's cert directory read-only or use a small sync step; reload Mosquitto on renewal.
+Mosquitto needs the TLS cert Caddy obtains — mount Caddy's cert directory read-only or use a small sync step (`broker/certs/sync-certs.sh`); reload Mosquitto on renewal.
 
 ---
 
 ## 7. Repository layout
 
-Paths marked * come from the design doc; the rest are a suggested default.
+Paths marked * come from the design doc; the rest were set by the initial file-structure commit (#1).
 ```
 firmware/               ESP-IDF project (Twyla)
-  main/ sensor_task.c, mqtt_task.c, wifi_manager.c, config.c
-  secrets.h.example     (secrets.h is git-ignored)
+  main/                 main, accel (I²C driver), sensor_task, rms (pure signal math),
+                        telemetry (JSON), mqtt_task, offline_queue, wifi_manager,
+                        time_sync (SNTP), config (NVS)
+  main/secrets.h.example  (secrets.h is git-ignored)
   tools/provision.py    serial NVS provisioning
-hardware/               schematics, BOM, enclosure CAD, photos (Twyla)
-services/ingest/ *      Go: subscriber, decoder, dedup, batchwriter, engine, sweeper
-  engine/               pure state engine + replay tests
-services/api/ *         Python (FastAPI): routes, notifier, busytimes job
-web/                    React app
+  tools/record_cycle.py log RMS to CSV over serial → testdata/cycles/
+hardware/               sensor, power, mount, wiring, BOM notes; enclosure/, pcb/, photos/ (Twyla)
+broker/                 Mosquitto: mosquitto.conf, topics.md
+  dynsec/               bootstrap.sh (service accounts, roles), roles.md
+  certs/sync-certs.sh   copy Caddy's cert to Mosquitto, reload on renewal
+services/ingest/ *      Go: subscriber (+ acker), decoder, registry, dedup, batchwriter,
+                        livestate, engine, sweeper, metrics, config
+  engine/               engine.go pure state machine; runner.go I/O wrapper; replay tests
+services/api/ *         Python (FastAPI): routes, store, middleware, devices (dynsec,
+                        credentials, config push), notifier, busytimes job
+web/                    React app: pages/, components/, hooks/, api/
 tools/loadgen/ *        Go load generator; Python seed script
+tools/demo/replay.py    replay recorded cycles into the `demo` fleet
 testdata/cycles/        recorded washer/dryer CSVs (shared fixtures)
-deploy/                 docker-compose.yml, Caddyfile, mosquitto.conf, dynsec setup
-db/migrations/          SQL migrations (schema, hypertable, cagg, policies)
-docs/                   design doc, review, ADRs, load-test results
+storage/migrations/     numbered SQL migrations (schema, hypertable, cagg, retention/compression, ...)
+storage/seed/           device_types defaults (thresholds/timers)
+storage/redis/keys.md   Redis key layout
+deploy/                 docker-compose.yml, Caddyfile, prometheus.yml, deploy.sh, backup/
+.github/workflows/      ci.yml, deploy.yml, firmware.yml (Twyla)
+docs/                   telemetry-contract.md, provisioning.md, adr/, load-tests.md
+                        (design doc and review if copied in)
 .env.example
 ```
 Go: a single module at the repo root covering `services/ingest` and `tools/loadgen`. Python: one `pyproject.toml` per Python service (`services/api`).
