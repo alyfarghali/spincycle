@@ -1,0 +1,1 @@
+# All services for local and production: proxy, mosquitto, ingest, api, postgres, redis, prometheus.

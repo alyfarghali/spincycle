@@ -1,0 +1,1 @@
+# On every PR: lint, unit tests per service, integration test against PG/Redis/Mosquitto, build images.

@@ -1,0 +1,1 @@
+// Telemetry payload builder interface.

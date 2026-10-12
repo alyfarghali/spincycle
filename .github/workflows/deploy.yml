@@ -1,0 +1,1 @@
+# On merge to main: build, push to GHCR, deploy over SSH.

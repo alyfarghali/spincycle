@@ -1,0 +1,1 @@
+-- 90-day retention, short loadtest retention, compression of chunks older than 1 day.

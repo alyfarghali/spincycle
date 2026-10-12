@@ -1,0 +1,1 @@
+-- Subscriptions (pending/sending/sent/expired/failed) and worker_cursor for the notifier.
