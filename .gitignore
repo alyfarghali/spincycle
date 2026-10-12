@@ -50,9 +50,9 @@ htmlcov/
 # Node / React dashboard
 # ============================================
 node_modules/
-dashboard/dist/
-dashboard/build/
-dashboard/.next/
+web/dist/
+web/build/
+web/.next/
 npm-debug.log*
 yarn-error.log*
 

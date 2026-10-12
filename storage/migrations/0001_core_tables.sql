@@ -1,0 +1,1 @@
+-- Tables: fleets, device_types, devices (with soft delete), machine_events.

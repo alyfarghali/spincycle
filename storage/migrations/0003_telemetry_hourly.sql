@@ -1,0 +1,1 @@
+-- Continuous aggregate telemetry_hourly (avg/max per device and metric), kept forever.

@@ -1,0 +1,1 @@
+-- Narrow telemetry table as a hypertable with (device_id, time DESC) index.
