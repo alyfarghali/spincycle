@@ -1,3 +1,3 @@
-// Persists last (boot, seq) per device in memory and Redis.
+// Redis pre-filter of recently committed reading IDs. Marked only after commit; Postgres readings_seen is the authority.
 
 package dedup

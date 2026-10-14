@@ -163,17 +163,18 @@ Decisions to make and justify (range, noise, sample rate, interface, cost):
 - **Enclosure**, BOM and cost per device.
 - **Stretch:** custom PCB (ESP32-C6 module, accelerometer, power, mounting holes).
 
-### 5.2 Telemetry contract [DOC] — the interface between Twyla and Aly
+### 5.2 Telemetry contract [FROZEN v1, Oct 12, 2026] — `docs/telemetry-contract.md`
+**`docs/telemetry-contract.md` is the source of truth.** This is a summary; if they disagree, the contract wins.
 Topic: `fleets/{fleet_id}/devices/{device_id}/telemetry`, QoS 1, not retained.
 ```json
-{ "device_id": "c6-washer-03", "boot": 12, "seq": 1842,
-  "ts": "2026-10-20T14:03:11Z", "metrics": { "vibration_rms": 0.42 } }
+{ "v": 1, "device_id": "c6-washer-03", "fw": "0.1.0", "boot": 12, "seq": 1842,
+  "ts": "2026-10-20T14:03:11.250Z", "metrics": { "vibration_rms": 0.0423 } }
 ```
-- `boot`: uint32, incremented on every power-up, stored in NVS.
-- `seq`: uint64, resets to 0 each boot. `(boot, seq)` uniquely identifies a message.
-- `ts`: RFC 3339 UTC from SNTP. `null` before the clock syncs; server then uses receive time.
-- `vibration_rms` unit: g (from `device_types.metrics`).
-- Any change to topic, field names, types or units is a contract change. Both people sign off, and the load generator, firmware, ingest decoder and fixtures change together.
+- Part A (platform: identity, connection, topics, envelope, delivery guarantees, validation) applies to every device type. Changing it bumps `v` and needs both people.
+- Part B (metric definitions): one meaning per metric name platform-wide. Changing how a metric is computed creates a new name.
+- Part C (laundry application): recorded cycle CSVs and expected transitions.
+- Delivery: at least once, deduplicated storage by `(device_id, boot, seq)` set membership, **no ordering guarantee**. Consumers must tolerate late readings.
+- The topic is authoritative over payload `device_id`. A new device type is a `device_types` row, never a contract change.
 
 ### 5.3 Firmware structure [DOC] (ESP-IDF, FreeRTOS)
 | Task/module | Responsibility |
@@ -228,14 +229,14 @@ pattern read  fleets/+/devices/%u/config
 
 [FIX] **Use Mosquitto's dynamic security plugin** instead of having the API rewrite the password file and reload Mosquitto. Rewriting requires write access to read-only config and signalling another container (usually mounting the Docker socket, a security smell). Dynsec manages clients/roles over MQTT on `$CONTROL/dynamic-security/#`, so the API just publishes commands with its own admin credential.
 
-Settings: `persistence true`; `max_queued_messages 1000`; shared subs `$share/ingest/...` for horizontal ingest.
+Settings: `persistence true` with `autosave_interval 60` (persistence is a periodic snapshot, so a broker crash loses up to 60 s of queued messages); `max_queued_messages 120000` (2,000 msg/s × 60 s of ingest downtime; the doc's 1000 would drop messages after 0.5 s); shared subs `$share/ingest/...` for horizontal ingest.
 
 ### 6.2 Ingest service [DOC + FIX]
 One Go process; goroutines connected by bounded channels.
 
 1. **Subscriber** — `$share/ingest/fleets/+/devices/+/telemetry` and `…/status`; pushes to channel cap 10,000.
 2. **Decoder** — parse JSON; validate: known device (from in-memory registry, refreshed every 60 s), numeric metrics, `ts` within ±1 h of now (else use receive time if null); drop + count invalid by reason.
-3. **Deduplicator** — compare `(boot, seq)` to last seen per device (memory + Redis `device:{id}:lastseq`). Newer boot always wins; same boot requires `seq > last`.
+3. **Deduplicator** — set membership on `(device_id, boot, seq)`, not `seq > last` (that drops valid out-of-order readings once ingest has several replicas). The authority is a `readings_seen` table written in the **same transaction** as the telemetry rows, so a crash between "mark seen" and "commit" can't lose a reading. Redis may hold a pre-filter of recently committed IDs, marked only after commit.
 4. **Fan-out** — batch writer; live-state updater (`device:{id}:latest`, `device:{id}:last_seen`); state engine.
 5. **Batch writer** — flush at 500 rows or timer, whichever first, via `COPY` into `telemetry`.
 6. **Offline sweeper** — every 30 s, offline if `last_seen` > 60 s ago; immediately on LWT `offline`.
@@ -462,6 +463,18 @@ When reviewing code or a design change, check it against this table.
 ---
 
 ## 9. Plan and current priorities
+
+### Current assignments (set Oct 12, 2026)
+Status: telemetry contract frozen (v1); housing emailed; one ESP32-C6 in hand.
+
+**Bare level** means the minimum that proves the path works end to end: no batching, no optimization, no hardening beyond what the contract requires. The bare ingest is also the load-test baseline, so keep it naive on purpose.
+
+| Who | Parts | Bare level is done when |
+|---|---|---|
+| Twyla | **Hardware + firmware** | Board, accelerometer and power assembled; device connects over Wi-Fi with TLS from the laundry room; computes `vibration_rms` per contract Part B; publishes the contract payload (`v`, `fw`, `boot`, `seq`, `ts`) with LWT and `online` status; at least 3 washer and 3 dryer cycles recorded per contract Part C |
+| Aly | **Broker + storage + ingest** | Mosquitto with a TLS listener and one per-device credential; Compose running Mosquitto, TimescaleDB and Redis with migrations 0001, 0002 and 0007 applied; ingest subscribes, validates per contract A9, and inserts one row per message; readings from the real device visible in `psql` |
+
+Not started until these are done: state engine, API, web page, notifier, load generator. The processor-tier decision (partitioned Redis Streams) is pending and doesn't block the bare ingest.
 
 Biggest risks — de-risk before building features:
 1. **Campus Wi-Fi.** Test an ESP32-C6 in the laundry room against a public TLS MQTT broker in week 1. Have WebSockets-on-443 ready.
