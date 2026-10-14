@@ -8,9 +8,9 @@
 *.key
 *.crt
 secrets/
+broker/certs/dev/
 # Firmware Wi-Fi and MQTT credentials (keep a secrets.example.h instead)
 firmware/main/secrets.h
-deploy/mosquitto/passwd
 
 # ============================================
 # ESP-IDF firmware
