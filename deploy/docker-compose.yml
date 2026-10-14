@@ -1,1 +1,33 @@
-# All services for local and production: proxy, mosquitto, ingest, api, postgres, redis, prometheus.
+# All services for local and production
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0.20
+    restart: unless-stopped
+    ports:
+      - "8883:8883" # secure front door; 1883 and 8080 stay on the Docker network
+    volumes:
+      - ../broker/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      # Held mail, retained messages and the dynsec accounts file.
+      - mosquitto-data:/mosquitto/data
+      # Dev certs from broker/certs/make-dev-certs.sh; production sets BROKER_CERT_DIR.
+      - ${BROKER_CERT_DIR:-../broker/certs/dev}/fullchain.pem:/mosquitto/certs/fullchain.pem:ro
+      - ${BROKER_CERT_DIR:-../broker/certs/dev}/privkey.pem:/mosquitto/certs/privkey.pem:ro
+
+  postgres:
+    image: timescale/timescaledb:2.30.2-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432" # this Mac only; never reachable from the network
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Runs every .sql file here, alphabetically, on first start with an empty database.
+      - ../storage/migrations:/docker-entrypoint-initdb.d:ro
+
+volumes:
+  mosquitto-data:
+  postgres-data:

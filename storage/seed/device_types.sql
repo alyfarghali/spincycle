@@ -1,1 +1,0 @@
--- Default washer and dryer device types with starting thresholds and timers.
