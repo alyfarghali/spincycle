@@ -1,5 +1,3 @@
-// Outcome counters: stored, duplicate, and each reject reason. Logged periodically; Prometheus /metrics comes later.
-
 package metrics
 
 import (
@@ -24,7 +22,6 @@ func (c *Counters) Add(name string, n int64) {
 
 func (c *Counters) Inc(name string) { c.Add(name, 1) }
 
-// Snapshot returns a copy, safe to read while counting continues.
 func (c *Counters) Snapshot() map[string]int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()

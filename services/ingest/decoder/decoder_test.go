@@ -1,5 +1,3 @@
-// Table tests for decoder validation rules (contract A9).
-
 package decoder
 
 import (

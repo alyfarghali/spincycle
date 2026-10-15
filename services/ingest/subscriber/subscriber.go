@@ -1,5 +1,3 @@
-// paho.golang MQTT 5 client: shared subscription, persistent session, manual ack; hands messages to a channel without blocking.
-
 package subscriber
 
 import (
@@ -94,7 +92,13 @@ func Start(ctx context.Context, cfg config.Config, inbox chan<- Message, quit <-
 	return autopaho.NewConnection(ctx, cliCfg)
 }
 
+// tlsConfig is only used for mqtts:// URLs. Without a CA file it trusts the
+// system CAs (a Let's Encrypt broker cert); with one, only that CA (dev).
+// Either way the certificate and hostname are verified.
 func tlsConfig(caFile string) (*tls.Config, error) {
+	if caFile == "" {
+		return &tls.Config{MinVersion: tls.VersionTLS12}, nil
+	}
 	pem, err := os.ReadFile(caFile)
 	if err != nil {
 		return nil, fmt.Errorf("read CA file: %w", err)

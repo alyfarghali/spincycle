@@ -1,6 +1,3 @@
-// Parses and validates telemetry per contract A9: known device, fleet matches topic, field types, ts window, declared metrics.
-// Pure function: no I/O, and the clock is passed in, so every rule is table-testable.
-
 package decoder
 
 import (
@@ -8,6 +5,21 @@ import (
 	"github.com/alyfarghali/spincycle/services/ingest/registry"
 	"strings"
 	"time"
+)
+
+const (
+	OK              Reason = ""
+	PayloadTooLarge Reason = "payload_too_large"
+	InvalidJSON     Reason = "invalid_json"
+	UnknownVersion  Reason = "unknown_version"
+	UnknownDevice   Reason = "unknown_device"
+	FleetMismatch   Reason = "fleet_mismatch"
+	DeviceMismatch  Reason = "device_mismatch"
+	BadType         Reason = "bad_type"
+	TSOutOfRange    Reason = "ts_out_of_range"
+	NoMetrics       Reason = "no_metrics"
+	maxPayload = 1024
+	maxSkew    = time.Hour
 )
 
 type Reading struct {
@@ -22,39 +34,15 @@ type Reading struct {
 
 type Reason string
 
-const (
-	OK              Reason = ""
-	PayloadTooLarge Reason = "payload_too_large"
-	InvalidJSON     Reason = "invalid_json"
-	UnknownVersion  Reason = "unknown_version"
-	UnknownDevice   Reason = "unknown_device"
-	FleetMismatch   Reason = "fleet_mismatch"
-	DeviceMismatch  Reason = "device_mismatch"
-	BadType         Reason = "bad_type"
-	TSOutOfRange    Reason = "ts_out_of_range"
-	NoMetrics       Reason = "no_metrics"
-)
-
-const (
-	maxPayload = 1024
-	maxSkew    = time.Hour
-)
-
 type DeviceLookup interface {
 	Lookup(id string) (registry.Device, bool)
 }
 
-// Decode checks one telemetry message in the order contract A9 lists.
-// It also returns the number of undeclared metrics it dropped, so the caller
-// can count them without rejecting the reading.
 func Decode(topic string, payload []byte, now time.Time, devs DeviceLookup) (Reading, Reason, int) {
 	if len(payload) > maxPayload {
 		return Reading{}, PayloadTooLarge, 0
 	}
 
-	// Decode to raw fields first and each field separately afterwards. A single
-	// json.Unmarshal into a struct can't tell "not JSON" from "wrong type",
-	// and A9 counts those as different reasons.
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &fields); err != nil || fields == nil {
 		return Reading{}, InvalidJSON, 0
@@ -65,8 +53,6 @@ func Decode(topic string, payload []byte, now time.Time, devs DeviceLookup) (Rea
 		return Reading{}, UnknownVersion, 0
 	}
 
-	// The topic is authoritative (A3): identity comes from it, not the payload.
-	// Topic shape: fleets/{fleet}/devices/{device}/telemetry
 	parts := strings.Split(topic, "/")
 	if len(parts) != 5 || parts[0] != "fleets" || parts[2] != "devices" || parts[4] != "telemetry" {
 		return Reading{}, UnknownDevice, 0
@@ -93,7 +79,7 @@ func Decode(topic string, payload []byte, now time.Time, devs DeviceLookup) (Rea
 		fw      string
 		boot    uint32
 		seq     uint64
-		ts      *string // stays nil when the payload has "ts": null
+		ts      *string 
 		metrics map[string]*float64
 	)
 	if !field(fields, "fw", &fw) ||
@@ -103,7 +89,6 @@ func Decode(topic string, payload []byte, now time.Time, devs DeviceLookup) (Rea
 		len(metrics) == 0 {
 		return Reading{}, BadType, 0
 	}
-	// ts is the one field allowed to be null, so it can't go through field().
 	if raw, ok := fields["ts"]; !ok {
 		return Reading{}, BadType, 0
 	} else if string(raw) != "null" && json.Unmarshal(raw, &ts) != nil {
@@ -115,7 +100,7 @@ func Decode(topic string, payload []byte, now time.Time, devs DeviceLookup) (Rea
 		FleetID:  topicFleet,
 		Boot:     boot,
 		Seq:      seq,
-		Time:     now, // until the device clock syncs, use our receive time (A5)
+		Time:     now, 
 		Received: now,
 	}
 	if ts != nil {
@@ -129,7 +114,6 @@ func Decode(topic string, payload []byte, now time.Time, devs DeviceLookup) (Rea
 		r.Time = t
 	}
 
-	// Keep only metrics the device's type declares; drop the rest and count them.
 	r.Metrics = make(map[string]float64, len(metrics))
 	dropped := 0
 	for name, value := range metrics {
@@ -148,10 +132,6 @@ func Decode(topic string, payload []byte, now time.Time, devs DeviceLookup) (Rea
 	return r, OK, dropped
 }
 
-// field decodes one required field into dst. False if it's missing, null, or
-// the wrong JSON type (e.g. a string where a number belongs, or -1 for a uint).
-// Null needs its own check: Go decodes null into a plain int or string by
-// leaving the zero value, so "boot": null would silently become boot 0.
 func field(fields map[string]json.RawMessage, name string, dst any) bool {
 	raw, ok := fields[name]
 	if !ok || string(raw) == "null" {

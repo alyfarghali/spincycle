@@ -1,5 +1,3 @@
-// Loads ingest settings from environment variables (see .env.example).
-
 package config
 
 import (
@@ -10,15 +8,13 @@ import (
 
 type Config struct {
 	BrokerURL    string // INGEST_BROKER_URL, e.g. mqtts://localhost:8883
-	CAFile       string // INGEST_CA_FILE: CA that signed the broker certificate
+	CAFile       string // INGEST_CA_FILE (optional): CA that signed the broker certificate; system CAs if unset
 	ClientID     string // INGEST_CLIENT_ID: fixed, so the broker keeps our session
 	MQTTUser     string // INGEST_MQTT_USER
 	MQTTPassword string // MQTT_INGEST_PASSWORD
 	DatabaseURL  string // DATABASE_URL
 }
 
-// Load reads every setting and reports all missing ones at once, so a bad
-// .env is fixed in one go instead of one variable per restart.
 func Load() (Config, error) {
 	var missing []string
 	get := func(name string) string {
@@ -31,7 +27,7 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		BrokerURL:    get("INGEST_BROKER_URL"),
-		CAFile:       get("INGEST_CA_FILE"),
+		CAFile:       os.Getenv("INGEST_CA_FILE"),
 		ClientID:     get("INGEST_CLIENT_ID"),
 		MQTTUser:     get("INGEST_MQTT_USER"),
 		MQTTPassword: get("MQTT_INGEST_PASSWORD"),

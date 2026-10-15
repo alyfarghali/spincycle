@@ -1,8 +1,3 @@
-// Wires the ingest pipeline together and handles shutdown.
-// Bare version (load-test baseline): one worker, one transaction per message, no batching.
-//
-//	broker → subscriber callback → inbox → worker: decode → save → ack
-
 package main
 
 import (
@@ -38,8 +33,6 @@ func run() error {
 		return err
 	}
 
-	// Ctrl-C or `docker stop` cancels stop. The broker connection gets its own
-	// context so it stays up until the worker has finished its last message.
 	stop, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -73,7 +66,6 @@ func run() error {
 		select {
 		case <-stop.Done():
 			slog.Info("shutting down")
-			// Unacked messages stay in our broker session and come back next run.
 			ctx, done := context.WithTimeout(context.Background(), 5*time.Second)
 			defer done()
 			_ = cm.Disconnect(ctx)
@@ -91,9 +83,6 @@ type worker struct {
 	counts *metrics.Counters
 }
 
-// handle processes one message. It acks only when the message is safely
-// stored, a duplicate, or rejected for good. If ingest is stopping before
-// the save succeeds, the message is left unacked and the broker redelivers it.
 func (w *worker) handle(ctx context.Context, m subscriber.Message) {
 	topic := m.Packet.Topic
 	r, reason, dropped := decoder.Decode(topic, m.Packet.Payload, time.Now(), w.reg)
@@ -123,9 +112,6 @@ func (w *worker) handle(ctx context.Context, m subscriber.Message) {
 	w.ack(m)
 }
 
-// saveWithRetry retries database errors with backoff (1 s, 2 s, 4 s … 30 s)
-// until the save succeeds or ctx is cancelled. Moving on without saving would
-// mean either acking an unsaved reading (lost) or not acking it (stuck).
 func (w *worker) saveWithRetry(ctx context.Context, r decoder.Reading) (bool, error) {
 	delay := time.Second
 	for {

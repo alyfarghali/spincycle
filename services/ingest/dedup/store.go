@@ -1,6 +1,3 @@
-// Postgres write path: records the reading's ID in readings_seen and its rows in telemetry in one transaction.
-// readings_seen is the authority for duplicates (contract A8); a Redis pre-filter can sit in front of it later.
-
 package dedup
 
 import (
@@ -18,10 +15,6 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-// Save stores a reading unless (device_id, boot, seq) was already stored.
-// stored is false for a duplicate. Marking it seen and writing its rows
-// happen in one transaction, so a crash can never leave a reading marked
-// seen but not stored (that reading would be lost on redelivery).
 func (s *Store) Save(ctx context.Context, r decoder.Reading) (stored bool, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
