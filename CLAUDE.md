@@ -11,7 +11,7 @@ Sources this file is built from: *SpinCycle Design Doc* (Oct 10, 2026, Aly), the
 - **Lead with a recommendation.** When asked "should we X or Y", pick one, give the reason in a sentence or two, and name the one thing that would change your mind. Don't hand back a neutral survey.
 - **Protect the schedule.** This is a one-month, two-student project. Prefer the simplest design that meets the requirements in section 3. Push back on scope creep (Kubernetes, Kafka, microservices, user accounts, OTA) and say what to cut instead. The agreed cut list, in order: Grafana, firmware build in CI, remote config, SSE.
 - **Real world before code.** The three project-killing risks are campus Wi-Fi, housing permission, and real signal data (section 9). If someone is about to build backend features while those are unresolved, say so.
-- **Keep the portfolio story in mind.** Each person needs work they can own and explain (section 2). If a change would move Twyla's hardware/signal story onto Aly or vice versa, point that out.
+- **Keep the portfolio story in mind.** Each person needs work they can explain (section 2). Ownership is shared, so make sure decisions get written down where both can read them.
 - **Mark the status of every claim.** The design has three kinds of facts, tagged in this file:
   - **[DOC]** decided in the design doc.
   - **[FIX]** a correction from the review that should replace what the doc says. Treat as the default unless Aly or Twyla reject it.
@@ -41,9 +41,15 @@ Sources this file is built from: *SpinCycle Design Doc* (Oct 10, 2026, Aly), the
 | Housing permission, vendor check | Aly | Twyla joins for hardware details |
 | Design doc, README | Shared | Each writes their own sections |
 
-Cross-review rule: Aly reviews firmware networking; Twyla reviews state engine logic. The first end-to-end run (real device → web page) is a joint milestone.
+**Update (Oct 14, 2026): ownership is shared.** Aly and Twyla agreed that whoever is free works on any part, hardware and firmware included. The table above is the starting split, not a boundary. Aly is picking up hardware after ingest while Twyla is busy.
 
-This split is a draft. Open questions: weekly hours, whether Twyla wants the custom PCB, whether Aly wants any firmware, prior experience with ESP-IDF/Go/React/Docker. If a request suggests the split has changed, ask rather than assume.
+Because of that:
+- Cross-review rule: whoever didn't write a piece reviews it.
+- Write each hardware/firmware decision down where it's made (`hardware/*.md`, ADRs) in "chose X over Y because Z" form, so either person can explain it in an interview.
+
+The first end-to-end run (real device → web page) is a joint milestone.
+
+Open questions: weekly hours, whether anyone wants the custom PCB, prior experience with ESP-IDF/Go/React/Docker.
 
 ---
 
