@@ -427,8 +427,10 @@ Mosquitto needs the TLS cert Caddy obtains — mount Caddy's cert directory read
 Paths marked * come from the design doc; the rest are a suggested default.
 ```
 firmware/               ESP-IDF project (Twyla)
-  main/ sensor_task.c, mqtt_task.c, wifi_manager.c, config.c
-  secrets.h.example     (secrets.h is git-ignored)
+  main/main.c           app_main only
+  components/sensing/       accel.c, rms.c, sensor_task.c
+  components/connectivity/  wifi_manager.c, time_sync.c, mqtt_task.c, telemetry.c, offline_queue.c
+  components/device_config/ config.c, secrets.h.example (secrets.h is git-ignored)
   tools/provision.py    serial NVS provisioning
 hardware/               schematics, BOM, enclosure CAD, photos (Twyla)
 services/ingest/ *      Go: subscriber, decoder, dedup, batchwriter, engine, sweeper

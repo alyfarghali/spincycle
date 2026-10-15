@@ -323,8 +323,11 @@ One top-level folder per high-level component; every file starts with a one-line
 spincycle/
 ├── hardware/            # Sensor, power, mount, wiring, enclosure, BOM, optional PCB
 ├── firmware/            # ESP-IDF project for the ESP32-C6
-│   ├── main/            # accel, sensor_task, rms, mqtt_task, telemetry, offline_queue,
-│   │                    # wifi_manager, time_sync, config, secrets.h.example
+│   ├── main/            # main.c only (app_main: starts everything)
+│   ├── components/
+│   │   ├── sensing/       # accel, rms, sensor_task
+│   │   ├── connectivity/  # wifi_manager, time_sync, mqtt_task, telemetry, offline_queue
+│   │   └── device_config/ # config (NVS), secrets.h.example
 │   ├── test/            # Host-side tests for pure firmware code
 │   └── tools/           # provision.py, record_cycle.py
 ├── broker/              # mosquitto.conf, topics, dynsec setup and roles, cert sync

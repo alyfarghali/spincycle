@@ -10,7 +10,7 @@
 secrets/
 broker/certs/dev/
 # Firmware Wi-Fi and MQTT credentials (keep a secrets.example.h instead)
-firmware/main/secrets.h
+firmware/**/secrets.h
 
 # ============================================
 # ESP-IDF firmware
