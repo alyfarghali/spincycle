@@ -11,7 +11,7 @@ Sources this file is built from: *SpinCycle Design Doc* (Oct 10, 2026, Aly), the
 - **Lead with a recommendation.** When asked "should we X or Y", pick one, give the reason in a sentence or two, and name the one thing that would change your mind. Don't hand back a neutral survey.
 - **Protect the schedule.** This is a one-month, two-student project. Prefer the simplest design that meets the requirements in section 3. Push back on scope creep (Kubernetes, Kafka, microservices, user accounts, OTA) and say what to cut instead. The agreed cut list, in order: Grafana, firmware build in CI, remote config, SSE.
 - **Real world before code.** The three project-killing risks are campus Wi-Fi, housing permission, and real signal data (section 9). If someone is about to build backend features while those are unresolved, say so.
-- **Keep the portfolio story in mind.** Each person needs work they can explain (section 2). Ownership is shared, so make sure decisions get written down where both can read them.
+- **Keep the portfolio story in mind.** Each person needs work they can own and explain (section 2). If a change would move Twyla's hardware/signal story onto Aly or vice versa, point that out.
 - **Mark the status of every claim.** The design has three kinds of facts, tagged in this file:
   - **[DOC]** decided in the design doc.
   - **[FIX]** a correction from the review that should replace what the doc says. Treat as the default unless Aly or Twyla reject it.
@@ -41,15 +41,9 @@ Sources this file is built from: *SpinCycle Design Doc* (Oct 10, 2026, Aly), the
 | Housing permission, vendor check | Aly | Twyla joins for hardware details |
 | Design doc, README | Shared | Each writes their own sections |
 
-**Update (Oct 14, 2026): ownership is shared.** Aly and Twyla agreed that whoever is free works on any part, hardware and firmware included. The table above is the starting split, not a boundary. Aly is picking up hardware after ingest while Twyla is busy.
+Cross-review rule: Aly reviews firmware networking; Twyla reviews state engine logic. The first end-to-end run (real device → web page) is a joint milestone.
 
-Because of that:
-- Cross-review rule: whoever didn't write a piece reviews it.
-- Write each hardware/firmware decision down where it's made (`hardware/*.md`, ADRs) in "chose X over Y because Z" form, so either person can explain it in an interview.
-
-The first end-to-end run (real device → web page) is a joint milestone.
-
-Open questions: weekly hours, whether anyone wants the custom PCB, prior experience with ESP-IDF/Go/React/Docker.
+This split is a draft. Open questions: weekly hours, whether Twyla wants the custom PCB, whether Aly wants any firmware, prior experience with ESP-IDF/Go/React/Docker. If a request suggests the split has changed, ask rather than assume.
 
 ---
 
@@ -169,18 +163,17 @@ Decisions to make and justify (range, noise, sample rate, interface, cost):
 - **Enclosure**, BOM and cost per device.
 - **Stretch:** custom PCB (ESP32-C6 module, accelerometer, power, mounting holes).
 
-### 5.2 Telemetry contract [FROZEN v1, Oct 12, 2026] — `docs/telemetry-contract.md`
-**`docs/telemetry-contract.md` is the source of truth.** This is a summary; if they disagree, the contract wins.
+### 5.2 Telemetry contract [DOC] — the interface between Twyla and Aly
 Topic: `fleets/{fleet_id}/devices/{device_id}/telemetry`, QoS 1, not retained.
 ```json
-{ "v": 1, "device_id": "c6-washer-03", "fw": "0.1.0", "boot": 12, "seq": 1842,
-  "ts": "2026-10-20T14:03:11.250Z", "metrics": { "vibration_rms": 0.0423 } }
+{ "device_id": "c6-washer-03", "boot": 12, "seq": 1842,
+  "ts": "2026-10-20T14:03:11Z", "metrics": { "vibration_rms": 0.42 } }
 ```
-- Part A (platform: identity, connection, topics, envelope, delivery guarantees, validation) applies to every device type. Changing it bumps `v` and needs both people.
-- Part B (metric definitions): one meaning per metric name platform-wide. Changing how a metric is computed creates a new name.
-- Part C (laundry application): recorded cycle CSVs and expected transitions.
-- Delivery: at least once, deduplicated storage by `(device_id, boot, seq)` set membership, **no ordering guarantee**. Consumers must tolerate late readings.
-- The topic is authoritative over payload `device_id`. A new device type is a `device_types` row, never a contract change.
+- `boot`: uint32, incremented on every power-up, stored in NVS.
+- `seq`: uint64, resets to 0 each boot. `(boot, seq)` uniquely identifies a message.
+- `ts`: RFC 3339 UTC from SNTP. `null` before the clock syncs; server then uses receive time.
+- `vibration_rms` unit: g (from `device_types.metrics`).
+- Any change to topic, field names, types or units is a contract change. Both people sign off, and the load generator, firmware, ingest decoder and fixtures change together.
 
 ### 5.3 Firmware structure [DOC] (ESP-IDF, FreeRTOS)
 | Task/module | Responsibility |
@@ -235,14 +228,14 @@ pattern read  fleets/+/devices/%u/config
 
 [FIX] **Use Mosquitto's dynamic security plugin** instead of having the API rewrite the password file and reload Mosquitto. Rewriting requires write access to read-only config and signalling another container (usually mounting the Docker socket, a security smell). Dynsec manages clients/roles over MQTT on `$CONTROL/dynamic-security/#`, so the API just publishes commands with its own admin credential.
 
-Settings: `persistence true` with `autosave_interval 60` (persistence is a periodic snapshot, so a broker crash loses up to 60 s of queued messages); `max_queued_messages 120000` (2,000 msg/s × 60 s of ingest downtime; the doc's 1000 would drop messages after 0.5 s); shared subs `$share/ingest/...` for horizontal ingest.
+Settings: `persistence true`; `max_queued_messages 1000`; shared subs `$share/ingest/...` for horizontal ingest.
 
 ### 6.2 Ingest service [DOC + FIX]
 One Go process; goroutines connected by bounded channels.
 
 1. **Subscriber** — `$share/ingest/fleets/+/devices/+/telemetry` and `…/status`; pushes to channel cap 10,000.
 2. **Decoder** — parse JSON; validate: known device (from in-memory registry, refreshed every 60 s), numeric metrics, `ts` within ±1 h of now (else use receive time if null); drop + count invalid by reason.
-3. **Deduplicator** — set membership on `(device_id, boot, seq)`, not `seq > last` (that drops valid out-of-order readings once ingest has several replicas). The authority is a `readings_seen` table written in the **same transaction** as the telemetry rows, so a crash between "mark seen" and "commit" can't lose a reading. Redis may hold a pre-filter of recently committed IDs, marked only after commit.
+3. **Deduplicator** — compare `(boot, seq)` to last seen per device (memory + Redis `device:{id}:lastseq`). Newer boot always wins; same boot requires `seq > last`.
 4. **Fan-out** — batch writer; live-state updater (`device:{id}:latest`, `device:{id}:last_seen`); state engine.
 5. **Batch writer** — flush at 500 rows or timer, whichever first, via `COPY` into `telemetry`.
 6. **Offline sweeper** — every 30 s, offline if `last_seen` > 60 s ago; immediately on LWT `offline`.
@@ -427,10 +420,8 @@ Mosquitto needs the TLS cert Caddy obtains — mount Caddy's cert directory read
 Paths marked * come from the design doc; the rest are a suggested default.
 ```
 firmware/               ESP-IDF project (Twyla)
-  main/main.c           app_main only
-  components/sensing/       accel.c, rms.c, sensor_task.c
-  components/connectivity/  wifi_manager.c, time_sync.c, mqtt_task.c, telemetry.c, offline_queue.c
-  components/device_config/ config.c, secrets.h.example (secrets.h is git-ignored)
+  main/ sensor_task.c, mqtt_task.c, wifi_manager.c, config.c
+  secrets.h.example     (secrets.h is git-ignored)
   tools/provision.py    serial NVS provisioning
 hardware/               schematics, BOM, enclosure CAD, photos (Twyla)
 services/ingest/ *      Go: subscriber, decoder, dedup, batchwriter, engine, sweeper
@@ -471,18 +462,6 @@ When reviewing code or a design change, check it against this table.
 ---
 
 ## 9. Plan and current priorities
-
-### Current assignments (set Oct 12, 2026)
-Status: telemetry contract frozen (v1); housing emailed; one ESP32-C6 in hand.
-
-**Bare level** means the minimum that proves the path works end to end: no batching, no optimization, no hardening beyond what the contract requires. The bare ingest is also the load-test baseline, so keep it naive on purpose.
-
-| Who | Parts | Bare level is done when |
-|---|---|---|
-| Twyla | **Hardware + firmware** | Board, accelerometer and power assembled; device connects over Wi-Fi with TLS from the laundry room; computes `vibration_rms` per contract Part B; publishes the contract payload (`v`, `fw`, `boot`, `seq`, `ts`) with LWT and `online` status; at least 3 washer and 3 dryer cycles recorded per contract Part C |
-| Aly | **Broker + storage + ingest** | Mosquitto with a TLS listener and one per-device credential; Compose running Mosquitto, TimescaleDB and Redis with migrations 0001, 0002 and 0007 applied; ingest subscribes, validates per contract A9, and inserts one row per message; readings from the real device visible in `psql` |
-
-Not started until these are done: state engine, API, web page, notifier, load generator. The processor-tier decision (partitioned Redis Streams) is pending and doesn't block the bare ingest.
 
 Biggest risks — de-risk before building features:
 1. **Campus Wi-Fi.** Test an ESP32-C6 in the laundry room against a public TLS MQTT broker in week 1. Have WebSockets-on-443 ready.

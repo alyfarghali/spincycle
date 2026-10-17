@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname "$0")/lib.sh"
@@ -50,3 +51,6 @@ try createClient loadgen -p "$MQTT_LOADGEN_PASSWORD"
 try addClientRole loadgen loadgen
 
 echo "Done. Add a device with: broker/dynsec/device.sh add <fleet_id> <device_id>"
+=======
+# One-time setup of the dynamic security plugin: admin client, service accounts (ingest, api, loadgen) and roles.
+>>>>>>> main

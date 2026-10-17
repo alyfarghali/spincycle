@@ -1,4 +1,5 @@
 -- Tables: fleets, device_types, devices (with soft delete), machine_events.
+<<<<<<< HEAD
 CREATE TABLE fleets (
     id TEXT PRIMARY KEY CHECK (id ~ '^[a-z0-9][a-z0-9-]{0,31}$'),
     name TEXT NOT NULL,
@@ -20,3 +21,5 @@ CREATE TABLE devices (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     deleted_at TIMESTAMPTZ
 );
+=======
+>>>>>>> main

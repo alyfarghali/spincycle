@@ -1,4 +1,5 @@
 -- Narrow telemetry table as a hypertable with (device_id, time DESC) index.
+<<<<<<< HEAD
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 CREATE TABLE telemetry (
@@ -10,3 +11,5 @@ CREATE TABLE telemetry (
 
 SELECT create_hypertable('telemetry', by_range('time', INTERVAL '1 day'));
 CREATE INDEX telemetry_device_time_idx ON telemetry (device_id, time DESC);
+=======
+>>>>>>> main

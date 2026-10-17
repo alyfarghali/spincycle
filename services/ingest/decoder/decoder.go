@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 package decoder
 
 import (
@@ -139,3 +140,8 @@ func field(fields map[string]json.RawMessage, name string, dst any) bool {
 	}
 	return json.Unmarshal(raw, dst) == nil
 }
+=======
+// Parses and validates telemetry: known device, fleet matches topic, numeric metrics, ts window; counts rejects by reason.
+
+package decoder
+>>>>>>> main

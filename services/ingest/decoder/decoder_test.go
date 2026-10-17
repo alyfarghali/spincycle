@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 package decoder
 
 import (
@@ -123,3 +124,8 @@ func TestDecodeNullTS(t *testing.T) {
 		t.Errorf("Time = %v, want receive time %v", r.Time, now)
 	}
 }
+=======
+// Table tests for decoder validation rules.
+
+package decoder
+>>>>>>> main

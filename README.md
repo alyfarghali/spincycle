@@ -323,11 +323,8 @@ One top-level folder per high-level component; every file starts with a one-line
 spincycle/
 ├── hardware/            # Sensor, power, mount, wiring, enclosure, BOM, optional PCB
 ├── firmware/            # ESP-IDF project for the ESP32-C6
-│   ├── main/            # main.c only (app_main: starts everything)
-│   ├── components/
-│   │   ├── sensing/       # accel, rms, sensor_task
-│   │   ├── connectivity/  # wifi_manager, time_sync, mqtt_task, telemetry, offline_queue
-│   │   └── device_config/ # config (NVS), secrets.h.example
+│   ├── main/            # accel, sensor_task, rms, mqtt_task, telemetry, offline_queue,
+│   │                    # wifi_manager, time_sync, config, secrets.h.example
 │   ├── test/            # Host-side tests for pure firmware code
 │   └── tools/           # provision.py, record_cycle.py
 ├── broker/              # mosquitto.conf, topics, dynsec setup and roles, cert sync
@@ -362,7 +359,7 @@ _Service ports and firmware flashing steps will be added as each component lands
 
 ## Message format
 
-Every device, of any type, publishes to:
+Devices publish to:
 
 ```
 fleets/{fleet_id}/devices/{device_id}/telemetry
@@ -370,17 +367,14 @@ fleets/{fleet_id}/devices/{device_id}/telemetry
 
 ```json
 {
-  "v": 1,
   "device_id": "c6-washer-03",
-  "fw": "0.1.0",
-  "boot": 12,
   "seq": 1842,
-  "ts": "2026-10-20T14:03:11.250Z",
-  "metrics": { "vibration_rms": 0.0423 }
+  "ts": "2026-10-20T14:03:11Z",
+  "metrics": { "vibration_rms": 0.42 }
 }
 ```
 
-`(device_id, boot, seq)` identifies each reading, so the platform can store it exactly once even when MQTT redelivers it or it arrives out of order. `metrics` is a generic map: a new kind of device declares its metrics on its device type and needs no protocol change. Full spec (frozen v1): [`docs/telemetry-contract.md`](docs/telemetry-contract.md).
+`seq` increases with every message, so the backend can detect duplicates and gaps. Full spec: [`docs/telemetry-contract.md`](docs/telemetry-contract.md).
 
 ## Benchmarks
 

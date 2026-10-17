@@ -1,1 +1,1 @@
-# Registers main.c (app_main only) with ESP-IDF. REQUIRES device_config sensing connectivity.
+# Registers the main component's source files with ESP-IDF.

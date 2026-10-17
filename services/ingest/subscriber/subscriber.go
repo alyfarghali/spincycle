@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 package subscriber
 
 import (
@@ -109,3 +110,8 @@ func tlsConfig(caFile string) (*tls.Config, error) {
 	}
 	return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, nil
 }
+=======
+// paho.golang MQTT 5 client: shared subscriptions, persistent session, manual ack; hands messages to a channel without blocking.
+
+package subscriber
+>>>>>>> main

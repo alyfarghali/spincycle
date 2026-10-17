@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 package config
 
 import (
@@ -38,3 +39,8 @@ func Load() (Config, error) {
 	}
 	return cfg, nil
 }
+=======
+// Loads ingest settings from env (broker, DB, Redis, batch size, flush interval).
+
+package config
+>>>>>>> main

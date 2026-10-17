@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 package dedup
 
 import (
@@ -47,3 +48,8 @@ func (s *Store) Save(ctx context.Context, r decoder.Reading) (stored bool, err e
 	}
 	return true, nil
 }
+=======
+// Persists last (boot, seq) per device in memory and Redis.
+
+package dedup
+>>>>>>> main

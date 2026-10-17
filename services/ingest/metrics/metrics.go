@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 package metrics
 
 import (
@@ -27,3 +28,8 @@ func (c *Counters) Snapshot() map[string]int64 {
 	defer c.mu.Unlock()
 	return maps.Clone(c.counts)
 }
+=======
+// Prometheus metrics: received, rejected by reason, duplicates, batch size, flush duration, latency.
+
+package metrics
+>>>>>>> main

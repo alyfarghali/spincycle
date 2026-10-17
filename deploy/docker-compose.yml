@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 services:
   mosquitto:
     image: eclipse-mosquitto:2.0.20
@@ -48,3 +49,6 @@ services:
 volumes:
   mosquitto-data:
   postgres-data:
+=======
+# All services for local and production: proxy, mosquitto, ingest, api, postgres, redis, prometheus.
+>>>>>>> main
