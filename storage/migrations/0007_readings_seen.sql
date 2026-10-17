@@ -1,5 +1,3 @@
--- readings_seen (device_id, boot, seq) primary key: committed duplicate detection, pruned after a few hours.
-
 CREATE TABLE readings_seen (
     device_id TEXT NOT NULL,
     boot BIGINT NOT NULL,
