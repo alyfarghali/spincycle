@@ -1,1 +1,1 @@
-# Registers the main component's source files with ESP-IDF.
+idf_component_register(SRCS "main.c")

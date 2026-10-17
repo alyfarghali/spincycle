@@ -45,3 +45,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
 }
+
+void app_main() {
+    printf("Hello Word\n");
+}
