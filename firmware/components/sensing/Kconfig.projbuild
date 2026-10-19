@@ -1,0 +1,21 @@
+menu "SpinCycle sensor"
+
+    config SPINCYCLE_I2C_SDA_GPIO
+        int "Accelerometer I2C SDA GPIO"
+        default 6
+        help
+            Must match hardware/wiring.md.
+
+    config SPINCYCLE_I2C_SCL_GPIO
+        int "Accelerometer I2C SCL GPIO"
+        default 7
+        help
+            Must match hardware/wiring.md.
+
+    config SPINCYCLE_ACCEL_I2C_ADDR
+        hex "ICM-20948 I2C address"
+        default 0x69
+        help
+            0x69 on the SparkFun breakout by default; 0x68 if the ADR jumper is bridged.
+
+endmenu
