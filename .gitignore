@@ -1,6 +1,3 @@
-# ============================================
-# Secrets — never commit these
-# ============================================
 .env
 .env.*
 !.env.example
@@ -8,23 +5,19 @@
 *.key
 *.crt
 secrets/
-# Firmware Wi-Fi and MQTT credentials (keep a secrets.example.h instead)
-firmware/main/secrets.h
-deploy/mosquitto/passwd
+broker/certs/dev/
+firmware/**/secrets.h
 
-# ============================================
 # ESP-IDF firmware
-# ============================================
 firmware/build/
+firmware/build.clang/
 firmware/managed_components/
 firmware/dependencies.lock
 firmware/sdkconfig
 firmware/sdkconfig.old
 # Keep firmware/sdkconfig.defaults committed (project settings)
 
-# ============================================
 # Go
-# ============================================
 *.exe
 *.test
 *.out
@@ -32,9 +25,7 @@ bin/
 vendor/
 coverage.txt
 
-# ============================================
 # Python
-# ============================================
 __pycache__/
 *.py[cod]
 .venv/
@@ -46,9 +37,7 @@ venv/
 htmlcov/
 *.egg-info/
 
-# ============================================
 # Node / React dashboard
-# ============================================
 node_modules/
 web/dist/
 web/build/
@@ -56,23 +45,19 @@ web/.next/
 npm-debug.log*
 yarn-error.log*
 
-# ============================================
 # Docker / local data
-# ============================================
 deploy/data/
 *.log
 
-# ============================================
 # Load test results (commit summaries in the README instead)
-# ============================================
 tools/loadgen/results/
 
-# ============================================
 # Editors and OS
-# ============================================
 .vscode/*
 !.vscode/extensions.json
 .idea/
 *.swp
 .DS_Store
 Thumbs.db
+firmware/test/compile_flags.txt
+firmware/.cache/

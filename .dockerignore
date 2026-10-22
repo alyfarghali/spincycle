@@ -1,0 +1,14 @@
+# Keeps secrets and bulk out of the Docker build context (builds use the repo root as context).
+.git
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+broker/certs/
+firmware/
+hardware/
+web/node_modules/
+web/dist/
+**/__pycache__/
+**/.venv/

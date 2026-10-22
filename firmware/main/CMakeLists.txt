@@ -1,1 +1,2 @@
-# Registers the main component's source files with ESP-IDF.
+idf_component_register(SRCS "main.c"
+                       PRIV_INCLUDE_DIRS "../components/device_config")
