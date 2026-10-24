@@ -4,7 +4,14 @@
 
 ICM-20948 on the SparkFun 9DoF Qwiic breakout, accelerometer only (gyro and magnetometer off).
 
-TODO (Twyla): why it was chosen over LIS3DH / ADXL345 / LIS2DH12, in "chose X over Y because Z" form.
+Chose the ICM-20948 over the LIS3DH / ADXL345 / LIS2DH12 because it was available on loan from the
+Georgia Tech library and meets every requirement: ±2 g, ~100 Hz, on-chip anti-aliasing filter, FIFO.
+It's a 9-axis IMU; the gyroscope and magnetometer are unused and turned off.
+
+**Open:** the board is borrowed, so the 2–4 installed devices need their own sensors.
+Recommendation: buy more ICM-20948s, so the driver and recordings carry over unchanged.
+A cheaper accelerometer-only part (e.g. LIS3DH) needs a new driver and at least one fresh recording,
+because its noise floor differs and thresholds tuned on ICM-20948 data may not transfer.
 
 ## Settings (`components/sensing/accel.c`)
 
