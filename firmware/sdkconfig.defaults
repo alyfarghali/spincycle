@@ -1,1 +1,2 @@
-# Committed ESP-IDF project settings (target esp32c6, watchdog, TLS cert bundle).
+CONFIG_IDF_TARGET="esp32c6"
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y

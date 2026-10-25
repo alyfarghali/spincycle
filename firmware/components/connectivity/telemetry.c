@@ -2,18 +2,20 @@
 
 #include <inttypes.h>
 #include <math.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <time.h>
 
 #define TS_LEN 25
 
-static void format_ts(const struct timeval *tv, char out[TS_LEN]) {
+static bool format_ts(const struct timeval *tv, char out[TS_LEN]) {
     struct tm t;
     time_t secs = tv->tv_sec;
     gmtime_r(&secs, &t);
 
-    snprintf(out, TS_LEN, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", t.tm_year + 1900,
+    int n = snprintf(out, TS_LEN, "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", t.tm_year + 1900,
         t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec, (int)(tv->tv_usec / 1000));
+    return n > 0 && n < TS_LEN;
 }
 
 int telemetry_build(char *buf, size_t len, const char *device_id,
@@ -27,7 +29,9 @@ int telemetry_build(char *buf, size_t len, const char *device_id,
         snprintf(ts_json, sizeof ts_json, "null");
     } else {
         char temp[TS_LEN];
-        format_ts(ts, temp);
+        if (!format_ts(ts, temp)) {
+            return -1;
+        }
         snprintf(ts_json, sizeof ts_json, "\"%s\"", temp);
     }
 
