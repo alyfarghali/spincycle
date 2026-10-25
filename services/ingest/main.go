@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 package main
 
 import (
@@ -156,8 +155,3 @@ func logCounts(ctx context.Context, counts *metrics.Counters) {
 		}
 	}
 }
-=======
-// Wires the ingest pipeline goroutines together and handles shutdown.
-
-package main
->>>>>>> main
