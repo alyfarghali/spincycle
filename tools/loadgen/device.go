@@ -16,7 +16,7 @@ const (
 type device struct {
 	id    string
 	seq   uint64
-	phase time.Duration 
+	phase time.Duration
 }
 
 type payload struct {

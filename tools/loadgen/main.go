@@ -81,7 +81,7 @@ func main() {
 
 	var wg sync.WaitGroup
 	for i := range *n {
-		d := &device{id: fmt.Sprintf("%s-%05d", *fleet, i+1), phase: time.Duration(rand.Int64N(int64(cycle)))}
+		d := &device{id: deviceID(*fleet, i+1), phase: time.Duration(rand.Int64N(int64(cycle)))}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -153,7 +153,7 @@ func connect(ctx context.Context, o options, clientID string, d *device, pending
 		return autopaho.NewConnection(ctx, cfg)
 	}
 
-	status := fmt.Sprintf("fleets/%s/devices/%s/status", o.fleet, d.id)
+	status := topic(o.fleet, d.id, "status")
 	cfg.WillMessage = &paho.WillMessage{Topic: status, Payload: []byte("offline"), QoS: 1, Retain: true}
 	cfg.OnConnectionUp = func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
 		connected.Add(1)
@@ -171,13 +171,13 @@ func goOffline(cm *autopaho.ConnectionManager, fleet, id string, pending *sync.W
 	pending.Wait() // an "online" still in flight would otherwise land after "offline" and overwrite it
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	status := fmt.Sprintf("fleets/%s/devices/%s/status", fleet, id)
+	status := topic(fleet, id, "status")
 	_, _ = cm.Publish(ctx, &paho.Publish{Topic: status, Payload: []byte("offline"), QoS: 1, Retain: true})
 	_ = cm.Disconnect(ctx)
 }
 
 func run(ctx context.Context, cm *autopaho.ConnectionManager, d *device, fleet string, boot uint32, interval time.Duration) {
-	topic := fmt.Sprintf("fleets/%s/devices/%s/telemetry", fleet, d.id)
+	telemetry := topic(fleet, d.id, "telemetry")
 	// Random offset within one interval, so devices that connected together don't publish together.
 	select {
 	case <-time.After(rand.N(interval)):
@@ -187,7 +187,7 @@ func run(ctx context.Context, cm *autopaho.ConnectionManager, d *device, fleet s
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
-		_, err := cm.Publish(ctx, &paho.Publish{Topic: topic, QoS: 1, Payload: d.reading(time.Now(), boot)})
+		_, err := cm.Publish(ctx, &paho.Publish{Topic: telemetry, QoS: 1, Payload: d.reading(time.Now(), boot)})
 		if ctx.Err() != nil {
 			return
 		}
@@ -202,6 +202,13 @@ func run(ctx context.Context, cm *autopaho.ConnectionManager, d *device, fleet s
 			return
 		}
 	}
+}
+
+// Matches tools/loadgen/seed.sql: loadtest-00001 ... loadtest-10000.
+func deviceID(fleet string, n int) string { return fmt.Sprintf("%s-%05d", fleet, n) }
+
+func topic(fleet, device, kind string) string {
+	return fmt.Sprintf("fleets/%s/devices/%s/%s", fleet, device, kind)
 }
 
 // Same rules as ingest's subscriber: certificate and hostname are always verified.
