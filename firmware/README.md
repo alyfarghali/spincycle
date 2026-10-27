@@ -115,7 +115,7 @@ Sample buffers (`s_x/s_y/s_z`, ~72 KB for the 60 s maximum) are `static`, not on
 
 ## `components/connectivity/`
 
-`CMakeLists.txt` registers `telemetry.c wifi_manager.c time_sync.c`; private dependencies `esp_wifi esp_netif esp_event esp_timer`.
+`CMakeLists.txt` registers `telemetry.c wifi_manager.c time_sync.c backoff.c`; private dependencies `esp_wifi esp_netif esp_event esp_timer`.
 Add each remaining file to `SRCS` as it's written.
 
 ### `wifi_manager.h` / `wifi_manager.c` — station Wi-Fi · **done**, reconnect test pending
@@ -126,9 +126,13 @@ Add each remaining file to `SRCS` as it's written.
 
 Private:
 - `on_event` — on start: connect. On disconnect: clear the connected flag, log the reason code, schedule a retry. On got-IP: log the IP, reset the backoff, set the flag.
-- `backoff_ms(attempt)` — 1, 2, 4, 8, 16, 32, then 60 s, each ±20 % random jitter (contract A2).
 - `retry_cb` — `esp_timer` callback that calls `esp_wifi_connect()`. A timer is used because the event handler runs on the shared event task and must not block.
 - Log tag is `wifi_mgr`, not `wifi`, because `main.c` silences `wifi` to warnings.
+
+### `backoff.h` / `backoff.c` — reconnect delay · **done**, tested
+| Function | Does |
+|---|---|
+| `uint32_t backoff_ms(uint32_t attempt, float r)` | Delay before reconnect attempt `attempt`: 1, 2, 4, 8, 16, 32, then 60 s (contract A2), times `0.8 + 0.4 r` for ±20 % jitter. `r` is uniform in [0, 1); `wifi_manager` passes `esp_random()`. Pure, so it's host-tested. |
 
 ### `telemetry.h` / `telemetry.c` — payload builder · **done**, tested
 | Function | Does |
@@ -180,18 +184,7 @@ Fixed 60-slot ring buffer of `window_t` (no `malloc`) for readings taken while d
 
 ## `test/` — host tests
 
-Plain C with `assert`, compiled with the Mac's `cc` (no ESP-IDF, no board). Run from `firmware/`:
-
-```sh
-cc -std=c11 -Wall -Wextra -I components/sensing/include test/test_rms.c components/sensing/rms.c -lm -o /tmp/test_rms && /tmp/test_rms
-cc -std=c11 -Wall -Wextra -I components/connectivity/include test/test_telemetry.c components/connectivity/telemetry.c -o /tmp/test_telemetry && /tmp/test_telemetry
-```
-
-| File | Covers |
-|---|---|
-| `test_rms.c` | Still and flat → 0; still and tilted → 0 (orientation-independent); sine of amplitude A → A/√2. |
-| `test_telemetry.c` | Exact timestamp string; `ts` null; `seq` above 2³²; NaN → −1; buffer too small → −1. |
-| `compile_flags.txt` | Local, git-ignored: tells clangd these files target macOS and where the headers are. |
+`firmware/test/run.sh` builds and runs every host test on the Mac. What each covers is in `test/README.md`.
 
 ## `tools/` · **stubs**
 

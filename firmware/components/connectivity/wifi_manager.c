@@ -1,4 +1,5 @@
 #include "wifi_manager.h"
+#include "backoff.h"
 
 #include <string.h>
 #include "esp_check.h"
@@ -12,7 +13,6 @@
 #include "freertos/event_groups.h"
 
 #define CONNECTED_BIT BIT0
-#define BACKOFF_MAX_MS 60000
 
 // Not "wifi": main.c quiets the driver's "wifi" tag, which would hide these lines too.
 static const char *TAG = "wifi_mgr";
@@ -20,14 +20,6 @@ static const char *TAG = "wifi_mgr";
 static EventGroupHandle_t s_events;
 static esp_timer_handle_t s_retry_timer;
 static uint32_t s_attempt;
-
-// 1, 2, 4 ... 32, then 60 s, each ±20 % (contract A2): jitter stops a fleet reconnecting in lockstep.
-static uint32_t backoff_ms(uint32_t attempt)
-{
-    uint32_t base = attempt < 6 ? 1000u << attempt : BACKOFF_MAX_MS;
-    float r = esp_random() / 4294967296.0f;
-    return (uint32_t)(base * (0.8f + 0.4f * r));
-}
 
 static void retry_cb(void *arg)
 {
@@ -42,7 +34,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         // Reason codes: esp_wifi_types_generic.h. 201 = SSID not found, 15/204 = usually wrong password, 202 = auth failed
         wifi_event_sta_disconnected_t *d = data;
         xEventGroupClearBits(s_events, CONNECTED_BIT);
-        uint32_t delay = backoff_ms(s_attempt++);
+        uint32_t delay = backoff_ms(s_attempt++, esp_random() / 4294967296.0f);
         ESP_LOGW(TAG, "disconnected (reason %d), retrying in %lu ms", d->reason, (unsigned long)delay);
         // A timer, not vTaskDelay: this handler runs on the shared event task, and blocking it stalls every other event.
         esp_timer_start_once(s_retry_timer, delay * 1000ULL);
