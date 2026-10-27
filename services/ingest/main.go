@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/alyfarghali/spincycle/services/ingest/config"
 	"github.com/alyfarghali/spincycle/services/ingest/decoder"
 	"github.com/alyfarghali/spincycle/services/ingest/dedup"
+	"github.com/alyfarghali/spincycle/services/ingest/engine"
 	"github.com/alyfarghali/spincycle/services/ingest/metrics"
 	"github.com/alyfarghali/spincycle/services/ingest/registry"
 	"github.com/alyfarghali/spincycle/services/ingest/subscriber"
@@ -49,6 +51,11 @@ func run() error {
 	slog.Info("registry loaded", "devices", reg.Len())
 
 	store := dedup.NewStore(pool)
+	machines, err := store.LoadStates(stop, time.Now())
+	if err != nil {
+		return err
+	}
+	slog.Info("machine states restored", "machines", len(machines))
 	counts := metrics.New()
 	inbox := make(chan subscriber.Message, subscriber.InboxSize)
 
@@ -61,7 +68,10 @@ func run() error {
 
 	go logCounts(stop, counts)
 
-	w := worker{reg: reg, store: store, counts: counts}
+	w := worker{reg: reg, store: store, counts: counts, machines: machines, ack: subscriber.Ack}
+	// In the worker loop, not a goroutine of its own, so the machines map needs no lock.
+	tick := time.NewTicker(tickEvery)
+	defer tick.Stop()
 	for {
 		select {
 		case <-stop.Done():
@@ -73,18 +83,29 @@ func run() error {
 			return nil
 		case m := <-inbox:
 			w.handle(stop, m)
+		case now := <-tick.C:
+			w.tick(stop, now)
 		}
 	}
 }
 
+// offline_after (60 s) + one tick stays within the 90 s offline-detection target (CLAUDE.md §3).
+const tickEvery = 30 * time.Second
+
 type worker struct {
-	reg    *registry.Registry
-	store  *dedup.Store
-	counts *metrics.Counters
+	reg      *registry.Registry
+	store    *dedup.Store
+	counts   *metrics.Counters
+	machines map[string]engine.Machine
+	ack      func(subscriber.Message) error
 }
 
 func (w *worker) handle(ctx context.Context, m subscriber.Message) {
 	topic := m.Packet.Topic
+	if strings.HasSuffix(topic, "/status") {
+		w.handleStatus(ctx, m)
+		return
+	}
 	r, reason, dropped := decoder.Decode(topic, m.Packet.Payload, time.Now(), w.reg)
 	if dropped > 0 {
 		w.counts.Add("undeclared_metric", int64(dropped))
@@ -95,46 +116,117 @@ func (w *worker) handle(ctx context.Context, m subscriber.Message) {
 		// message would come back forever (a "poison message").
 		w.counts.Inc(string(reason))
 		slog.Warn("reading rejected", "reason", reason, "topic", topic)
-		w.ack(m)
+		w.ackOrLog(m)
 		return
 	}
 
-	stored, err := w.saveWithRetry(ctx, r)
+	// Only computed here; memory changes after the commit, so a failed save leaves state untouched.
+	next, transitions, hasState := w.step(r)
+	stored, err := w.saveWithRetry(ctx, r, transitions)
 	if err != nil {
 		return // stopping: leave unacked for redelivery
 	}
 	if stored {
 		w.counts.Inc("stored")
+		if hasState {
+			w.apply(r.DeviceID, next, transitions)
+		}
 	} else {
 		w.counts.Inc("duplicate")
 		slog.Info("duplicate dropped", "device_id", r.DeviceID, "boot", r.Boot, "seq", r.Seq)
 	}
-	w.ack(m)
+	w.ackOrLog(m)
 }
 
-func (w *worker) saveWithRetry(ctx context.Context, r decoder.Reading) (bool, error) {
+func (w *worker) step(r decoder.Reading) (engine.Machine, []engine.Transition, bool) {
+	dev, _ := w.reg.Lookup(r.DeviceID)
+	rms, ok := r.Metrics["vibration_rms"]
+	if dev.EngineErr != nil || !ok {
+		return engine.Machine{}, nil, false
+	}
+	next, transitions := engine.OnReading(w.machines[r.DeviceID], rms, r.Time, dev.Engine)
+	return next, transitions, true
+}
+
+func (w *worker) handleStatus(ctx context.Context, m subscriber.Message) {
+	id, offline, reason := decoder.DecodeStatus(m.Packet.Topic, m.Packet.Payload, w.reg)
+	if reason != decoder.OK {
+		w.counts.Inc(string(reason))
+		w.ackOrLog(m)
+		return
+	}
+	if offline {
+		next, transitions := engine.OnOffline(w.machines[id], time.Now())
+		if len(transitions) > 0 {
+			if err := w.retry(ctx, id, func() error { return w.store.SaveTransitions(ctx, id, transitions) }); err != nil {
+				return // stopping: leave unacked for redelivery
+			}
+			w.apply(id, next, transitions)
+		}
+	}
+	w.ackOrLog(m)
+}
+
+func (w *worker) tick(ctx context.Context, now time.Time) {
+	for id, m := range w.machines {
+		dev, ok := w.reg.Lookup(id)
+		if !ok || dev.EngineErr != nil {
+			continue
+		}
+		next, transitions := engine.OnTick(m, now, dev.Engine)
+		if len(transitions) == 0 {
+			continue
+		}
+		// No retry: on failure memory is unchanged, so the next tick recomputes the same transitions.
+		if err := w.store.SaveTransitions(ctx, id, transitions); err != nil {
+			w.counts.Inc("db_error")
+			slog.Error("save transitions failed", "device_id", id, "err", err)
+			continue
+		}
+		w.apply(id, next, transitions)
+	}
+}
+
+func (w *worker) apply(id string, next engine.Machine, transitions []engine.Transition) {
+	w.machines[id] = next
+	for _, t := range transitions {
+		w.counts.Inc("transition")
+		slog.Info("transition", "device_id", id, "from", t.From, "to", t.To, "at", t.At)
+	}
+}
+
+func (w *worker) saveWithRetry(ctx context.Context, r decoder.Reading, transitions []engine.Transition) (bool, error) {
+	var stored bool
+	err := w.retry(ctx, r.DeviceID, func() (err error) {
+		stored, err = w.store.Save(ctx, r, transitions)
+		return err
+	})
+	return stored, err
+}
+
+func (w *worker) retry(ctx context.Context, deviceID string, save func() error) error {
 	delay := time.Second
 	for {
-		stored, err := w.store.Save(ctx, r)
+		err := save()
 		if err == nil {
-			return stored, nil
+			return nil
 		}
 		if ctx.Err() != nil {
-			return false, ctx.Err()
+			return ctx.Err()
 		}
 		w.counts.Inc("db_error")
-		slog.Error("save failed; retrying", "device_id", r.DeviceID, "retry_in", delay.String(), "err", err)
+		slog.Error("save failed; retrying", "device_id", deviceID, "retry_in", delay.String(), "err", err)
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return ctx.Err()
 		}
 		delay = min(delay*2, 30*time.Second)
 	}
 }
 
-func (w *worker) ack(m subscriber.Message) {
-	err := subscriber.Ack(m)
+func (w *worker) ackOrLog(m subscriber.Message) {
+	err := w.ack(m)
 	switch {
 	case errors.Is(err, subscriber.ErrStaleConnection):
 		w.counts.Inc("ack_stale") // fine: redelivered and deduped
