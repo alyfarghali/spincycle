@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 package registry
 
 import (
@@ -63,8 +62,3 @@ func (r *Registry) Lookup(id string) (Device, bool) {
 }
 
 func (r *Registry) Len() int { return len(r.devices) }
-=======
-// In-memory device registry (device -> fleet, type, config), refreshed from Postgres every 60 s.
-
-package registry
->>>>>>> main
