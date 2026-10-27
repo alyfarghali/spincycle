@@ -61,3 +61,4 @@ tools/loadgen/results/
 Thumbs.db
 firmware/test/compile_flags.txt
 firmware/.cache/
+TODO.md
