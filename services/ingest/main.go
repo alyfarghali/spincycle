@@ -115,7 +115,7 @@ func (w *worker) handle(ctx context.Context, m subscriber.Message) {
 func (w *worker) saveWithRetry(ctx context.Context, r decoder.Reading) (bool, error) {
 	delay := time.Second
 	for {
-		stored, err := w.store.Save(ctx, r)
+		stored, err := w.store.Save(ctx, r, nil)
 		if err == nil {
 			return stored, nil
 		}
