@@ -28,6 +28,19 @@ services:
       timeout: 3s
       retries: 10
 
+  redis:
+    image: redis:7.4.1-alpine
+    restart: unless-stopped
+    # A cache only: everything in it is rebuilt from Postgres and new readings.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   ingest:
     build:
       context: .. 
@@ -39,11 +52,14 @@ services:
       INGEST_MQTT_USER: ingest
       MQTT_INGEST_PASSWORD: ${MQTT_INGEST_PASSWORD}
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
       mosquitto:
         condition: service_started
+      redis:
+        condition: service_healthy
 
 volumes:
   mosquitto-data:

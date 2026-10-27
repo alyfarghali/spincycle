@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/alyfarghali/spincycle/services/ingest/config"
 	"github.com/alyfarghali/spincycle/services/ingest/decoder"
 	"github.com/alyfarghali/spincycle/services/ingest/dedup"
 	"github.com/alyfarghali/spincycle/services/ingest/engine"
+	"github.com/alyfarghali/spincycle/services/ingest/livestate"
 	"github.com/alyfarghali/spincycle/services/ingest/metrics"
 	"github.com/alyfarghali/spincycle/services/ingest/registry"
 	"github.com/alyfarghali/spincycle/services/ingest/subscriber"
@@ -56,6 +58,16 @@ func run() error {
 		return err
 	}
 	slog.Info("machine states restored", "machines", len(machines))
+
+	redisOpts, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		return err
+	}
+	// Short timeouts and no retries: a slow or dead cache must not hold up storing and acking readings.
+	redisOpts.DialTimeout, redisOpts.ReadTimeout, redisOpts.WriteTimeout = redisTimeout, redisTimeout, redisTimeout
+	redisOpts.MaxRetries = -1
+	rdb := redis.NewClient(redisOpts)
+	defer rdb.Close()
 	counts := metrics.New()
 	inbox := make(chan subscriber.Message, subscriber.InboxSize)
 
@@ -68,7 +80,9 @@ func run() error {
 
 	go logCounts(stop, counts)
 
-	w := worker{reg: reg, store: store, counts: counts, machines: machines, ack: subscriber.Ack}
+	w := worker{reg: reg, store: store, counts: counts, machines: machines, ack: subscriber.Ack,
+		live: livestate.New(rdb), liveDirty: true}
+	w.rebuildLive(stop, time.Now())
 	// In the worker loop, not a goroutine of its own, so the machines map needs no lock.
 	tick := time.NewTicker(tickEvery)
 	defer tick.Stop()
@@ -92,12 +106,21 @@ func run() error {
 // offline_after (60 s) + one tick stays within the 90 s offline-detection target (CLAUDE.md §3).
 const tickEvery = 30 * time.Second
 
+const (
+	redisTimeout = 300 * time.Millisecond
+	redisBackoff = 5 * time.Second
+)
+
 type worker struct {
 	reg      *registry.Registry
 	store    *dedup.Store
 	counts   *metrics.Counters
 	machines map[string]engine.Machine
 	ack      func(subscriber.Message) error
+
+	live          *livestate.Writer
+	liveDownUntil time.Time
+	liveDirty     bool // a live-state write was missed; rebuild the fleets on the next tick
 }
 
 func (w *worker) handle(ctx context.Context, m subscriber.Message) {
@@ -131,6 +154,14 @@ func (w *worker) handle(ctx context.Context, m subscriber.Message) {
 		if hasState {
 			w.apply(r.DeviceID, next, transitions)
 		}
+		fleet := w.fleetOf(r.DeviceID)
+		m := w.machines[r.DeviceID]
+		w.writeLive(ctx, func(ctx context.Context) error {
+			if err := w.live.Reading(ctx, fleet, r, m); err != nil {
+				return err
+			}
+			return w.live.Transitions(ctx, fleet, r.DeviceID, m, transitions, r.Received)
+		})
 	} else {
 		w.counts.Inc("duplicate")
 		slog.Info("duplicate dropped", "device_id", r.DeviceID, "boot", r.Boot, "seq", r.Seq)
@@ -162,12 +193,16 @@ func (w *worker) handleStatus(ctx context.Context, m subscriber.Message) {
 				return // stopping: leave unacked for redelivery
 			}
 			w.apply(id, next, transitions)
+			w.writeLive(ctx, func(ctx context.Context) error {
+				return w.live.Transitions(ctx, w.fleetOf(id), id, next, transitions, time.Now())
+			})
 		}
 	}
 	w.ackOrLog(m)
 }
 
 func (w *worker) tick(ctx context.Context, now time.Time) {
+	defer w.rebuildLive(ctx, now)
 	for id, m := range w.machines {
 		dev, ok := w.reg.Lookup(id)
 		if !ok || dev.EngineErr != nil {
@@ -184,6 +219,50 @@ func (w *worker) tick(ctx context.Context, now time.Time) {
 			continue
 		}
 		w.apply(id, next, transitions)
+		w.writeLive(ctx, func(ctx context.Context) error {
+			return w.live.Transitions(ctx, w.fleetOf(id), id, next, transitions, now)
+		})
+	}
+}
+
+func (w *worker) fleetOf(id string) string {
+	dev, _ := w.reg.Lookup(id)
+	return dev.FleetID
+}
+
+// Redis is a cache (CLAUDE.md §8): a failure is counted and skipped, never retried in line.
+func (w *worker) writeLive(ctx context.Context, write func(context.Context) error) bool {
+	if w.live == nil {
+		return false
+	}
+	if time.Now().Before(w.liveDownUntil) {
+		w.counts.Inc("redis_skipped")
+		w.liveDirty = true
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, redisTimeout)
+	defer cancel()
+	if err := write(ctx); err != nil {
+		w.counts.Inc("redis_error")
+		w.liveDirty = true
+		w.liveDownUntil = time.Now().Add(redisBackoff)
+		slog.Warn("live state write failed; skipping Redis for a while", "retry_in", redisBackoff.String(), "err", err)
+		return false
+	}
+	return true
+}
+
+func (w *worker) rebuildLive(ctx context.Context, now time.Time) {
+	if !w.liveDirty {
+		return
+	}
+	if w.writeLive(ctx, func(ctx context.Context) error {
+		return w.live.Rebuild(ctx, w.machines, func(id string) (string, bool) {
+			dev, ok := w.reg.Lookup(id)
+			return dev.FleetID, ok
+		})
+	}) {
+		w.liveDirty = false
 	}
 }
 

@@ -13,6 +13,7 @@ type Config struct {
 	MQTTUser     string // INGEST_MQTT_USER
 	MQTTPassword string // MQTT_INGEST_PASSWORD
 	DatabaseURL  string // DATABASE_URL
+	RedisURL     string // REDIS_URL
 }
 
 func Load() (Config, error) {
@@ -32,6 +33,7 @@ func Load() (Config, error) {
 		MQTTUser:     get("INGEST_MQTT_USER"),
 		MQTTPassword: get("MQTT_INGEST_PASSWORD"),
 		DatabaseURL:  get("DATABASE_URL"),
+		RedisURL:     get("REDIS_URL"),
 	}
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing environment variables: %s", strings.Join(missing, ", "))
