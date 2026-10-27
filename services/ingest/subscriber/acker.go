@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 package subscriber
 
 import "errors"
@@ -13,8 +12,3 @@ func Ack(m Message) error {
 	}
 	return m.client.Ack(m.Packet)
 }
-=======
-// Acks messages in order, only after the batch containing them is committed.
-
-package subscriber
->>>>>>> main

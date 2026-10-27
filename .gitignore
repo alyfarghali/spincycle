@@ -65,3 +65,4 @@ firmware/test_app/build/
 firmware/test_app/sdkconfig
 firmware/test_app/sdkconfig.old
 firmware/test_app/dependencies.lock
+TODO.md

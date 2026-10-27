@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 package subscriber
 
 import (
@@ -18,6 +17,7 @@ import (
 
 const (
 	TelemetryTopic = "$share/ingest/fleets/+/devices/+/telemetry"
+	StatusTopic    = "$share/ingest/fleets/+/devices/+/status"
 	ReceiveMaximum = 1000
 	InboxSize      = 2 * ReceiveMaximum
 )
@@ -61,9 +61,9 @@ func Start(ctx context.Context, cfg config.Config, inbox chan<- Message, quit <-
 			slog.Info("broker connected", "url", serverURL.Redacted())
 			go func() {
 				if _, err := cm.Subscribe(ctx, &paho.Subscribe{
-					Subscriptions: []paho.SubscribeOptions{{Topic: TelemetryTopic, QoS: 1}},
+					Subscriptions: []paho.SubscribeOptions{{Topic: TelemetryTopic, QoS: 1}, {Topic: StatusTopic, QoS: 1}},
 				}); err != nil {
-					slog.Error("subscribe failed", "topic", TelemetryTopic, "err", err)
+					slog.Error("subscribe failed", "err", err)
 				}
 			}()
 		},
@@ -110,8 +110,3 @@ func tlsConfig(caFile string) (*tls.Config, error) {
 	}
 	return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}, nil
 }
-=======
-// paho.golang MQTT 5 client: shared subscriptions, persistent session, manual ack; hands messages to a channel without blocking.
-
-package subscriber
->>>>>>> main
