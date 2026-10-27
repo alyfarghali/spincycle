@@ -92,12 +92,24 @@ are ignored.
 go test ./services/ingest/engine -v
 ```
 
-- `engine_test.go` — one row per scenario: short bump, 30 s start, 4 min soak pause, 5 min finish,
-  `clear_after`, hysteresis both ways, silence → offline, short and long Wi-Fi drops mid-cycle, long
-  drop while idle, short drop while finished, late reading. Placeholder thresholds until recordings exist.
+- `engine_test.go`, each test against a spec rule (placeholder thresholds until recordings exist):
+  - `TestTransitions` — one row per scenario: short bump, 30 s start, 4 min soak pause, 5 min finish,
+    `clear_after`, hysteresis both ways (doesn't start, doesn't reset, doesn't count as quiet), a quiet run
+    interrupted by shaking, a new cycle before `clear_after`, silence → offline, short and long Wi-Fi drops
+    mid-cycle, long drop while idle, `unknown` → running, short drop while finished, late reading, and the
+    CLAUDE.md §8 failure modes: neighbour shaking in short bursts, reboot mid-cycle with and without the sweeper.
+  - `TestTransitionTimes` — every transition's `At` (e.g. running at the reading that completes `start_confirm`).
+  - `TestClearAfterTimestamp` — finished → free is stamped at the expiry, not when noticed.
+  - `TestOfflineEdgeCases` — Last Will or tick for a never-seen device; repeated offline signals give one transition.
+  - `TestResumeWindowBoundary` — back exactly at `resume_window` resumes; 5 s later is `unknown`.
+  - `TestDuplicateReadingIgnored` — a reading with the same timestamp changes nothing (contract A8 redelivery).
+  - `TestParseParams` — merge and override, no defaults, every invalid value, non-engine keys ignored.
 - `replay_test.go` — every CSV in `testdata/synthetic/` and `testdata/cycles/` (columns
   `ts,vibration_rms,event`). Checks contract C2: running within `start_confirm` + 60 s of `start`,
   finished within `stop_confirm` + 60 s of `end`, never finished or free in between.
 - `testdata/synthetic/` holds made-up cycles until real recordings land in `testdata/cycles/`
-  (which is for real recordings only). Verified to catch a too-short `stop_confirm`: at 3 min the
-  washer's 4 min soak pause fails as a false "finished".
+  (which is for real recordings only).
+
+Proven able to fail (mutation checks): a too-short `stop_confirm` (3 min) fails the replay on the soak pause;
+an exclusive resume window fails `TestResumeWindowBoundary`; removing hysteresis fails both hysteresis rows;
+resolving `unknown` to free after a mid-cycle drop fails the long-drop row.
