@@ -18,5 +18,5 @@ firmware/test/run.sh          # builds and runs all of them; stops at the first 
 Proven able to fail: 2-digit milliseconds, 3 significant digits, a 64 s cap, ±10 % jitter and skipping
 gravity removal each fail a test.
 
-Not host-testable (hardware, verified on the board): `accel.c`, `sensor_task.c`, `wifi_manager.c`
-(connect and reconnect test with a hotspot), `time_sync.c` (synced ~1.3 s after Wi-Fi).
+Hardware code (`accel.c`, `sensor_task.c`, `wifi_manager.c`, `time_sync.c`) is tested on the board by
+`firmware/test_app/`.

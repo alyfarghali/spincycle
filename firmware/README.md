@@ -31,6 +31,7 @@ firmware/
     connectivity/        Wi-Fi, telemetry payload, (later) SNTP, MQTT, offline queue
     device_config/       NVS-backed settings and dev secrets
   test/                  host-side unit tests for the pure code
+  test_app/              on-board tests (separate ESP-IDF project)
   tools/                 provisioning and recording scripts (stubs)
 ```
 
@@ -185,6 +186,12 @@ Fixed 60-slot ring buffer of `window_t` (no `malloc`) for readings taken while d
 ## `test/` — host tests
 
 `firmware/test/run.sh` builds and runs every host test on the Mac. What each covers is in `test/README.md`.
+
+## `test_app/` — on-board tests
+
+A separate ESP-IDF project that runs Unity tests on the real board: the pure code on the chip's own libc and
+soft float, the accelerometer, Wi-Fi, SNTP and `sensor_task`. `firmware/test_app/run.sh <port>`; details
+in `test_app/README.md`.
 
 ## `tools/` · **stubs**
 
