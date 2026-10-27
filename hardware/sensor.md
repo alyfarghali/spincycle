@@ -1,3 +1,36 @@
 # sensor
 
-Accelerometer choice (LIS3DH / ADXL345 / LIS2DH12): range, noise density, ODR, interface, cost.
+## Chosen
+
+ICM-20948 on the SparkFun 9DoF Qwiic breakout, accelerometer only (gyro and magnetometer off).
+
+Chose the ICM-20948 over the LIS3DH / ADXL345 / LIS2DH12 because it was available on loan from the
+Georgia Tech library and meets every requirement: ±2 g, ~100 Hz, on-chip anti-aliasing filter, FIFO.
+It's a 9-axis IMU; the gyroscope and magnetometer are unused and turned off.
+
+**Open:** the board is borrowed, so the 2–4 installed devices need their own sensors.
+Recommendation: buy more ICM-20948s, so the driver and recordings carry over unchanged.
+A cheaper accelerometer-only part (e.g. LIS3DH) needs a new driver and at least one fresh recording,
+because its noise floor differs and thresholds tuned on ICM-20948 data may not transfer.
+
+## Settings (`components/sensing/accel.c`)
+
+| Setting | Value | Why |
+|---|---|---|
+| Range | ±2 g | Contract B1 |
+| Sample rate | 1125 / 11 ≈ 102.3 Hz | Nearest the chip gets to 100 Hz; a 500-sample window lasts ~4.9 s, not 5 s (open) |
+| Low-pass filter | DLPFCFG=3, ~50 Hz | Anti-aliasing at ~100 Hz sampling, and a lower noise floor |
+| Readout | On-chip FIFO | The sensor's clock paces samples, so FreeRTOS timing jitter doesn't matter |
+
+## Bench results (Oct 22, 2026, firmware bench test, board lying flat)
+
+| Test | `vibration_rms` |
+|---|---|
+| Still on a desk | 0.0014-0.0015 g (noise floor) |
+| Single tap on the desk | ~0.004 g for one window |
+| Taped to a speaker playing 20 Hz | ~0.027 g, every window while playing |
+
+Speaker on is ~18× the still floor, and both on-periods and all off-periods repeated to within a few percent.
+A brief tap barely moves one window: RMS averages over the whole window, so short bumps are diluted.
+
+Raw axes when flat and still: x ≈ +0.01, y ≈ -0.01, z ≈ +1.02 g (offsets of 1-2 % are normal).
