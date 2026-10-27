@@ -24,9 +24,7 @@ Sources this file is built from: *SpinCycle Design Doc* (Oct 10, 2026, Aly), the
 ## 2. People and ownership
  Aly and Twyla agreed that whoever is free works on any part, hardware and firmware included. The table above is the starting split, not a boundary. Aly is picking up hardware after ingest while Twyla is busy.
 
-Because of that:
-- Cross-review rule: whoever didn't write a piece reviews it.
-- Write each hardware/firmware decision down where it's made (`hardware/*.md`, ADRs) in "chose X over Y because Z" form, so either person can explain it in an interview.
+Because of that, write each hardware/firmware decision down where it's made (`hardware/*.md`, ADRs) in "chose X over Y because Z" form, so either person can explain it in an interview.
 
 The first end-to-end run (real device → web page) is a joint milestone.
 
