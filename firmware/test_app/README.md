@@ -16,6 +16,17 @@ It builds, flashes, prints one line per test, and exits 0 only if everything pas
 For the full log instead: `cd firmware/test_app && idf.py -p /dev/cu.usbserial-XXXX flash monitor`.
 Afterwards, flash the device firmware again from `firmware/`.
 
+## Files
+
+| File | Suite |
+|---|---|
+| `main/test_main.c` | Shared setup (NVS, netif, event loop) and the run order |
+| `main/test_target.c` | target |
+| `main/test_sensing.c` | accel, sensor_task |
+| `main/test_connectivity.c` | connectivity |
+
+**Status:** builds; not yet run on the board.
+
 ## Tests, in run order
 
 Order matters: `accel_init` and `sensor_task_start` can each run once per boot, and the sensor task test

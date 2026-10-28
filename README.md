@@ -2,7 +2,19 @@
 
 **Live laundry machine availability for campus laundry rooms, powered by ESP32-C6 sensors and a general-purpose IoT fleet backend.**
 
-> 🚧 Work in progress: target launch **Nov 8, 2026**. Live demo link coming in week 3.
+> 🚧 Work in progress: target launch **Nov 8, 2026**. The backend is deployed at
+> **[spincycle.alyfarghali.com](https://spincycle.alyfarghali.com)** (broker on `:8883`); the web page is next.
+
+### Status
+
+| Part | State |
+|---|---|
+| Firmware | Wi-Fi with backoff, SNTP, accelerometer and RMS on the board; MQTT publishing next |
+| Broker | Deployed: TLS on 8883 with a Let's Encrypt certificate, per-device accounts (dynsec) |
+| Ingest | Deployed: validation, dedup, TimescaleDB, state engine, Redis live state |
+| API | Contract written ([`docs/api.md`](docs/api.md)); skeleton in [`services/api/`](services/api/) |
+| Web page | Not started |
+| Load generator | 10,000 separate device connections; benchmark results pending |
 
 Never walk down to the laundry room just to find every machine taken. SpinCycle puts a small vibration sensor on each washer and dryer, figures out which machines are free, running or finished, and shows it on a live web page. Tap **"Notify me"** and you'll get an email when your load is done.
 
@@ -286,29 +298,32 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    subgraph VM["One VM: deploy/docker-compose.yml"]
-        CAD["proxy: Caddy :80, :443<br/>Caddyfile"] --> API["api"]
-        MQ["mosquitto :8883"] --> ING["ingest"]
-        ING --> PG[("postgres + timescaledb<br/>named volume")]
-        ING --> RD[("redis, no persistence")]
-        API --> PG
-        API --> RD
-        PROM["prometheus<br/>prometheus.yml"] -.-> ING
-        PROM -.-> API
+    subgraph VM["Shared portfolio server"]
+        EDGE["edge Caddy :80, :443<br/>HTTPS for every project"]
+        subgraph SC["SpinCycle: docker-compose.yml + docker-compose.prod.yml"]
+            CAD["proxy: Caddy :80 internal<br/>Caddyfile"] --> API["api"]
+            MQ["mosquitto :8883"] --> ING["ingest"]
+            ING --> PG[("postgres + timescaledb<br/>named volume")]
+            ING --> RD[("redis, no persistence")]
+            API --> PG
+            API --> RD
+        end
+        EDGE -->|"spincycle.alyfarghali.com"| CAD
+        EDGE -->|"TLS cert, sync-certs.sh"| MQ
     end
-    CAD -->|"TLS cert"| MQ
-    PR["Pull request"] -->|"ci.yml, firmware.yml"| CI["lint, unit tests, integration test,<br/>image + firmware build"]
-    MERGE["Merge to main"] -->|"deploy.yml"| GHCR["GHCR images"]
-    GHCR -->|"deploy.sh: SSH, pull, up -d"| VM
+    LAPTOP["Laptop"] -->|"deploy.sh: rsync, compose up --build"| SC
     PG -->|"backup/pg_dump.sh, nightly"| BK["Off-box backup"]
-    UPT["External uptime check"] -->|"/health"| CAD
+    UPT["External uptime check"] -->|"/health"| EDGE
 ```
+
+SpinCycle shares a server with other projects; one edge Caddy terminates HTTPS for all of them.
+[`deploy/README.md`](deploy/README.md) has the layout and setup.
 
 ## Tech stack
 
 | Layer | Technology |
 | --- | --- |
-| Firmware | ESP-IDF (C) on ESP32-C6, MPU-6050 / ADXL345 accelerometer |
+| Firmware | ESP-IDF (C) on ESP32-C6, ICM-20948 accelerometer |
 | Messaging | MQTT (Mosquitto) |
 | Backend | Python (FastAPI) for the API, notifier and tooling; Go for the ingest service and load generator |
 | Storage | PostgreSQL + TimescaleDB, Redis |
@@ -350,12 +365,19 @@ spincycle/
 **Prerequisites:** Docker and Docker Compose. For firmware: [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) and an ESP32-C6 board.
 
 ```bash
-git clone https://github.com/<your-username>/spincycle.git
+git clone https://github.com/alyfarghali/spincycle.git
 cd spincycle
-docker compose -f deploy/docker-compose.yml up
+cp .env.example .env
+broker/certs/make-dev-certs.sh
+docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres redis mosquitto
+broker/dynsec/bootstrap.sh
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --build ingest
 ```
 
-_Service ports and firmware flashing steps will be added as each component lands._
+Set every `change-me` in `.env` first. Each component's README covers the rest:
+[`firmware/`](firmware/README.md), [`services/ingest/`](services/ingest/README.md),
+[`services/api/`](services/api/README.md), [`storage/`](storage/README.md),
+[`tools/loadgen/`](tools/loadgen/README.md), [`deploy/`](deploy/README.md).
 
 ## Message format
 
@@ -367,14 +389,18 @@ fleets/{fleet_id}/devices/{device_id}/telemetry
 
 ```json
 {
+  "v": 1,
   "device_id": "c6-washer-03",
+  "fw": "0.1.0",
+  "boot": 12,
   "seq": 1842,
-  "ts": "2026-10-20T14:03:11Z",
-  "metrics": { "vibration_rms": 0.42 }
+  "ts": "2026-10-20T14:03:11.250Z",
+  "metrics": { "vibration_rms": 0.0423 }
 }
 ```
 
-`seq` increases with every message, so the backend can detect duplicates and gaps. Full spec: [`docs/telemetry-contract.md`](docs/telemetry-contract.md).
+`boot` increments on every restart and `seq` on every message, so `(device_id, boot, seq)` identifies a
+reading: the backend stores each one once even when MQTT delivers it twice or out of order. Full spec: [`docs/telemetry-contract.md`](docs/telemetry-contract.md).
 
 ## Benchmarks
 

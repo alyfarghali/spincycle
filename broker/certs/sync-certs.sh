@@ -3,7 +3,7 @@
 #
 # Production only. Run daily from cron on the server, as root:
 #   0 4 * * * /srv/spincycle/broker/certs/sync-certs.sh
-# Needs DOMAIN and BROKER_CERT_DIR in .env, and the proxy (Caddy) service running.
+# Needs DOMAIN, BROKER_CERT_DIR and CERT_SOURCE (the server's edge Caddy container) in .env.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -13,6 +13,7 @@ source "$root/.env"
 set +a
 : "${DOMAIN:?DOMAIN must be set in .env}"
 : "${BROKER_CERT_DIR:?BROKER_CERT_DIR must be set in .env}"
+: "${CERT_SOURCE:?CERT_SOURCE must be set in .env}"
 
 compose() {
   docker compose --project-directory "$root/deploy" --env-file "$root/.env" \
@@ -24,8 +25,8 @@ src="/data/caddy/certificates/acme-v02.api.letsencrypt.org-directory/$DOMAIN"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-compose cp "proxy:$src/$DOMAIN.crt" "$tmp/fullchain.pem"
-compose cp "proxy:$src/$DOMAIN.key" "$tmp/privkey.pem"
+docker cp "$CERT_SOURCE:$src/$DOMAIN.crt" "$tmp/fullchain.pem"
+docker cp "$CERT_SOURCE:$src/$DOMAIN.key" "$tmp/privkey.pem"
 
 mkdir -p "$BROKER_CERT_DIR"
 if cmp -s "$tmp/fullchain.pem" "$BROKER_CERT_DIR/fullchain.pem"; then

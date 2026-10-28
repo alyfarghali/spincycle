@@ -1,0 +1,11 @@
+services:
+  proxy:
+    networks:
+      default:
+      edge:
+        aliases:
+          - spincycle-web
+
+networks:
+  edge:
+    external: true

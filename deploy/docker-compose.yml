@@ -1,4 +1,15 @@
 services:
+  proxy:
+    image: caddy:2.8.4-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../web/dist:/srv/web:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
   mosquitto:
     image: eclipse-mosquitto:2.0.20
     restart: unless-stopped
@@ -62,5 +73,7 @@ services:
         condition: service_healthy
 
 volumes:
+  caddy-data:
+  caddy-config:
   mosquitto-data:
   postgres-data:
