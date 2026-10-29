@@ -15,6 +15,9 @@ firmware/managed_components/
 firmware/dependencies.lock
 firmware/sdkconfig
 firmware/sdkconfig.old
+firmware/sdkconfig.fake
+firmware/sdkconfig.fake.old
+firmware/build-fake/
 # Keep firmware/sdkconfig.defaults committed (project settings)
 
 # Go

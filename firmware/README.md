@@ -72,6 +72,12 @@ Next: replace step 5's print with `telemetry_build()` + publish once `mqtt_task`
 `Kconfig.projbuild` adds a "SpinCycle sensor" menu: `SPINCYCLE_I2C_SDA_GPIO` (6), `SPINCYCLE_I2C_SCL_GPIO` (7),
 `SPINCYCLE_ACCEL_I2C_ADDR` (0x69). These must match `hardware/wiring.md`.
 
+**Fake sensor:** `SPINCYCLE_FAKE_ACCEL` (off by default) builds `accel_fake.c` instead of `accel.c`. It has the
+same `accel.h` API, timing and FIFO-overflow behavior, so the rest of the firmware can be bench-tested with no
+sensor attached. Each cycle is idle for `SPINCYCLE_FAKE_IDLE_S` (120 s, rms ≈ 0.001 g), then running for
+`SPINCYCLE_FAKE_RUN_S` (360 s, rms ≈ 0.05 g). Turn it on in `idf.py menuconfig` → SpinCycle sensor. Never
+record its output into `testdata/cycles/` or publish it as a real machine.
+
 ### `accel.h` / `accel.c` — ICM-20948 driver · **done**
 Types and constants:
 - `accel_sample_t { float x, y, z; }` — one sample in g.

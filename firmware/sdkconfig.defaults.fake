@@ -1,0 +1,2 @@
+# Overlay for bench builds with no accelerometer. Use with sdkconfig.defaults; see README "Fake sensor".
+CONFIG_SPINCYCLE_FAKE_ACCEL=y
