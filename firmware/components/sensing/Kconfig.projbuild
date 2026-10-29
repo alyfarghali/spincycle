@@ -18,4 +18,24 @@ menu "SpinCycle sensor"
         help
             0x69 on the SparkFun breakout by default; 0x68 if the ADR jumper is bridged.
 
+    config SPINCYCLE_FAKE_ACCEL
+        bool "Fake accelerometer (no sensor attached)"
+        default n
+        help
+            Replace the ICM-20948 driver with synthetic samples: gravity, noise, and a shake
+            that switches on and off on a fixed cycle. For testing Wi-Fi, MQTT and the backend
+            without hardware. Never use it for recordings in testdata/cycles/.
+
+    config SPINCYCLE_FAKE_IDLE_S
+        int "Fake: idle seconds per cycle"
+        depends on SPINCYCLE_FAKE_ACCEL
+        range 1 86400
+        default 120
+
+    config SPINCYCLE_FAKE_RUN_S
+        int "Fake: running seconds per cycle"
+        depends on SPINCYCLE_FAKE_ACCEL
+        range 1 86400
+        default 360
+
 endmenu
