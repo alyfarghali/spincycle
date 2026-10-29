@@ -1,135 +1,80 @@
 # SpinCycle
 
-**Live laundry machine availability for campus laundry rooms, powered by ESP32-C6 sensors and a general-purpose IoT fleet backend.**
+**Live laundry-machine status from clip-on vibration sensors, built on an IoT fleet backend designed for
+10,000 devices.**
 
-> 🚧 Work in progress: target launch **Nov 8, 2026**. Live demo link coming in week 3.
+[spincycle.alyfarghali.com](https://spincycle.alyfarghali.com) · [Telemetry contract](docs/telemetry-contract.md) · [API contract](docs/api.md) · [Load tests](docs/load-tests.md)
 
-Never walk down to the laundry room just to find every machine taken. SpinCycle puts a small vibration sensor on each washer and dryer, figures out which machines are free, running or finished, and shows it on a live web page. Tap **"Notify me"** and you'll get an email when your load is done.
+An ESP32-C6 with an accelerometer clips onto each washer and dryer. Every 5 seconds it publishes one
+number, the vibration RMS, over MQTT/TLS. The backend turns that stream into **free / running / finished
+/ offline** for every machine and shows it on a live web page. Students stop walking down to a full
+laundry room.
 
-Under the hood, SpinCycle is a general IoT fleet platform: devices, device types and fleets are modeled generically, so a laundry room is just the first fleet, not the only one.
+The laundry room is the first fleet, not a special case. Devices, device types and fleets are modelled
+generically, so a new kind of sensor is a database row, not a code change. The real deployment has a
+handful of devices. The backend is built and load-tested for 10,000.
 
 ---
 
-## Features
+## Engineering highlights
 
-- **Live machine status**: free, running or finished, updated every few seconds
-- **"Notify me when done"**: email alert when your machine finishes
-- **Busy-times chart**: when the laundry room is usually quiet, by hour and day
-- **Device management**: per-device credentials, heartbeats and offline alerts
-- **Built to scale**: load-tested with 10,000 simulated devices (results below)
+- **No lost readings, no duplicates, across crashes.** Ingest acknowledges an MQTT message only after the
+  reading is committed to Postgres, using a persistent MQTT 5 session. The dedup record
+  `(device_id, boot, seq)` is written in the same transaction as the reading. Measured: 3,000 of 3,000
+  readings stored exactly once with ingest `kill -9`'d mid-stream ([run 0](docs/load-tests.md)).
+- **A state machine that never shows a wrong "free".** Classification is a pure function
+  `(state, reading, now, params) → (state, transitions)`. It uses hysteresis (separate on/off thresholds)
+  and confirmation windows that ride out wash-cycle pauses. A sensor that drops off Wi-Fi mid-cycle comes
+  back to its previous state, or to `unknown`. It never jumps to `free`, which would skip the "finished"
+  alert. Table-driven tests replay recorded cycles through it.
+- **Live state for 10,000 devices in one Redis read.** Ingest keeps a per-fleet state map and per-state
+  counts. A Lua script updates both atomically, so the counts can't drift from the map whatever order
+  updates arrive in. A Redis outage never blocks storage: ingest backs off and rebuilds the cache from
+  Postgres.
+- **An API sized for the whole fleet on screen.** The entire fleet's live state is one string, one
+  character per device (~10 KB for 10,000 devices, versus ~1.1 MB of JSON). Responses are cached for 2 s
+  behind a single-flight lock, so a thousand viewers cost one Redis read every 2 s.
+- **Security end to end.** TLS on every hop. The broker serves a real Let's Encrypt certificate, which
+  devices verify with ESP-IDF's certificate bundle; there is no skip-verification option anywhere. Each
+  device has its own credential and can publish only to its own topics, enforced by Mosquitto's
+  dynamic-security plugin.
+- **A load generator that tests connections, not just message rate.** Each simulated device holds its own
+  MQTT connection, with its own Last Will and online/offline status. 10,000 devices means 10,000 real
+  connections.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    subgraph Device["Per machine: hardware + firmware"]
-        ACC["Accelerometer"] -->|"I²C, 100 Hz"| FW["ESP32-C6 firmware<br/>RMS every 5 s"]
+    subgraph Device["Per machine"]
+        ACC["ICM-20948<br/>accelerometer"] -->|"I²C FIFO"| FW["ESP32-C6 firmware<br/>RMS every 5 s"]
     end
-    subgraph Tools["Tools"]
-        LG["Load generator<br/>10k simulated devices"]
-        DM["Demo replayer<br/>recorded cycles"]
-    end
-    FW -->|"MQTT/TLS :8883<br/>telemetry, status, LWT"| MQ["Mosquitto 2.x<br/>dynsec auth + ACL"]
-    MQ -->|"retained config"| FW
+    LG["Load generator<br/>10,000 simulated devices"]
+    FW -->|"MQTT 5 / TLS :8883<br/>telemetry, status, Last Will"| MQ["Mosquitto<br/>per-device auth + ACL"]
     LG --> MQ
-    DM --> MQ
-    MQ -->|"$share/ingest/..."| ING["Ingest service (Go)<br/>decode, dedupe, batch write,<br/>state engine, offline sweeper"]
-    ING -->|"COPY batches,<br/>machine_events"| PG[("Postgres 16 + TimescaleDB<br/>durable record")]
-    ING -->|"live state, dedup,<br/>events pub/sub"| RD[("Redis 7<br/>cache only")]
-    RD --> API["API service (Python, FastAPI)<br/>REST, notifier, busy-times"]
-    PG <--> API
-    API -->|"dynsec commands,<br/>device config"| MQ
-    WEB["React page"] -->|"HTTPS, poll 5 s"| CAD["Caddy"]
+    MQ -->|"shared subscription"| ING["Ingest (Go)<br/>validate · dedupe · store<br/>state engine · live state"]
+    ING -->|"readings + transitions,<br/>one transaction"| PG[("Postgres 16<br/>+ TimescaleDB")]
+    ING -->|"fleet map, counts,<br/>rates, events"| RD[("Redis 7<br/>cache only")]
+    RD --> API["API (Python, FastAPI)"]
+    PG --> API
+    WEB["Web page"] -->|"HTTPS, poll 5 s"| CAD["Caddy"]
     CAD -->|"/api"| API
-    API -->|"finished / offline alerts"| USR["Students + team"]
-    ING -.->|"/metrics"| PROM["Prometheus"]
-    API -.->|"/metrics"| PROM
 ```
 
-1. Each ESP32-C6 samples an accelerometer at 100 Hz and publishes one vibration RMS value every 5 seconds over MQTT/TLS.
-2. Mosquitto authenticates each device and only lets it publish to its own topics in its own fleet.
-3. The ingest service validates and dedupes readings, batch-writes them to TimescaleDB, updates live state in Redis, and runs the state engine that turns vibration into free / running / finished / offline.
-4. The API serves live state from Redis and history from TimescaleDB to the web page, notifies students when their machine finishes, and alerts the team when a device goes offline.
+**One reading, end to end:**
+1. The device samples the accelerometer, computes the RMS of the magnitude minus its mean over a 5 s
+   window, and publishes `{v, device_id, fw, boot, seq, ts, metrics}` at QoS 1.
+2. Mosquitto checks the device's credential and that the topic is its own, then delivers to ingest
+   through a shared subscription, so more ingest replicas can be added without code changes.
+3. Ingest validates the payload against the device registry (the topic, not the payload, decides which
+   device and fleet a reading belongs to). It stores the reading and its dedup record in one transaction,
+   runs the state engine, and writes any transition in that same transaction. Only then does it
+   acknowledge the message.
+4. Ingest updates Redis: the latest reading, the fleet's state map and counts, per-second rates, and a
+   pub/sub event per transition.
+5. The page polls the API, which serves live state from Redis and history from TimescaleDB.
 
-## Low-level design
-
-Each high-level component is a top-level folder; each low-level piece is a file or subfolder inside it.
-
-### Hardware — [`hardware/`](hardware/) (Twyla)
-
-```mermaid
-flowchart LR
-    OUT["Wall outlet"] --> PSU["USB adapter, 5 V<br/>power.md"]
-    PSU --> C6["ESP32-C6 dev board"]
-    C6 <-->|"I²C SDA/SCL, 3.3 V<br/>wiring.md"| ACC["Accelerometer<br/>sensor.md<br/>LIS3DH / ADXL345 / LIS2DH12"]
-    ACC --- MNT["Magnet mount, top panel<br/>mount.md"]
-    MNT --- MACH["Washer / dryer"]
-    C6 --- ENC["Enclosure<br/>enclosure/"]
-    ACC --- ENC
-```
-
-Sensor choice, power source and mount are still open; `bom.md` tracks cost per device and `pcb/` is the stretch custom board.
-
-### Firmware — [`firmware/`](firmware/) (Twyla)
-
-```mermaid
-flowchart TB
-    NVS[("config.c<br/>NVS: ids, creds, broker URL,<br/>boot counter, interval")] --> MAIN["main.c<br/>app_main + task watchdog"]
-    MAIN --> WIFI["wifi_manager.c<br/>backoff 1, 2, 4 … 60 s"]
-    MAIN --> SNTP["time_sync.c<br/>SNTP"]
-    MAIN --> ST["sensor_task.c<br/>5 s windows"]
-    MAIN --> MT["mqtt_task.c"]
-    ACC["accel.c<br/>I²C, 100 Hz"] --> ST
-    ST -->|"500 samples"| RMS["rms.c<br/>magnitude − running mean → RMS"]
-    RMS -->|"FreeRTOS queue"| MT
-    MT --> TEL["telemetry.c<br/>device_id, boot, seq, ts, metrics"]
-    SNTP -->|"ts or null"| TEL
-    MT <-->|"while disconnected"| OQ["offline_queue.c<br/>~60 readings, drop oldest"]
-    MT -->|"QoS 1, TLS with CA verified<br/>online status + LWT"| BROKER["Mosquitto"]
-    BROKER -->|"retained config"| MT
-    PROV["tools/provision.py"] -.->|"serial"| NVS
-    REC["tools/record_cycle.py"] -.->|"serial → CSV"| CSV["testdata/cycles/"]
-```
-
-### MQTT broker — [`broker/`](broker/) (Aly)
-
-```mermaid
-flowchart LR
-    DEV["Device<br/>user = device ID"] -->|"publish telemetry, status"| ACL{"dynsec role<br/>own topics, own fleet"}
-    ACL -->|"allowed"| TOP["fleets/{fleet}/devices/{id}/…<br/>topics.md"]
-    ACL -->|"denied"| DROP["rejected"]
-    TOP -->|"$share/ingest"| ING["ingest account"]
-    APIA["api account"] -->|"retained config"| TOP
-    APIA -->|"$CONTROL/dynamic-security"| DS["Dynsec plugin<br/>dynsec/bootstrap.sh, roles.md"]
-    LGA["loadgen account"] -->|"fleets/loadtest/… only"| TOP
-    CADDY["Caddy's cert"] -->|"certs/sync-certs.sh"| TLS["mosquitto.conf<br/>TLS :8883, wss fallback"]
-```
-
-### Ingest service — [`services/ingest/`](services/ingest/) (Aly, Go)
-
-```mermaid
-flowchart LR
-    MQ["Mosquitto"] -->|"telemetry + status"| SUB["subscriber/<br/>paho MQTT 5, persistent<br/>session, manual ack"]
-    SUB -->|"chan, cap 10k"| DEC["decoder/<br/>validate, fleet matches topic"]
-    REG["registry/<br/>refresh every 60 s"] --> DEC
-    DEC -->|"status / LWT"| SW["sweeper/<br/>every 30 s"]
-    DEC --> DD["dedup/<br/>(boot, seq)"]
-    DD --> BW["batchwriter/<br/>500 rows or flush interval"]
-    DD --> LS["livestate/"]
-    DD --> EN["engine/<br/>pure state machine"]
-    SW --> EN
-    BW -->|"COPY"| TEL[("telemetry")]
-    BW -->|"after commit"| ACK["subscriber/acker.go<br/>in-order PUBACK"]
-    ACK --> MQ
-    LS --> RLS[("Redis latest, last_seen")]
-    EN --> RUN["engine/runner.go"]
-    RUN --> RST[("Redis state + events")]
-    RUN --> ME[("machine_events")]
-```
-
-The acker is what makes QoS 1 survive an ingest crash: a message is only acknowledged after the row holding it is committed.
-
-#### State engine — [`services/ingest/engine/`](services/ingest/engine/)
+### Machine state engine
 
 ```mermaid
 stateDiagram-v2
@@ -138,270 +83,130 @@ stateDiagram-v2
     finished --> running: shaking for start_confirm
     running --> finished: quiet for stop_confirm
     finished --> free: clear_after elapsed
-    free --> offline: silent for offline_after, or LWT
-    running --> offline: silent for offline_after, or LWT
-    finished --> offline: silent for offline_after, or LWT
-    state "restore previous state + timers" as resume
+    free --> offline: silent for offline_after, or Last Will
+    running --> offline: silent for offline_after, or Last Will
+    finished --> offline: silent for offline_after, or Last Will
+    state "previous state + timers" as resume
     offline --> resume: back within resume_window
     offline --> unknown: back after resume_window
     unknown --> running: shaking for start_confirm
     unknown --> free: quiet for start_confirm
 ```
 
-There is deliberately no `offline → free` edge: a sensor that drops off Wi-Fi mid-cycle must never show its machine as free. Thresholds and timers come from `device_types.config` / `devices.config`, and `replay_test.go` runs every recorded cycle in `testdata/cycles/` through the engine.
+There is deliberately no `offline → free` edge. Thresholds and timers live in `device_types.config`, with
+per-device overrides, so retuning means a migration and no reflash. Readings that arrive late (MQTT
+doesn't guarantee order) are stored but never move the state backwards.
 
-### Storage — [`storage/`](storage/) (Aly)
+## Design decisions
 
-```mermaid
-erDiagram
-    fleets ||--o{ devices : contains
-    device_types ||--o{ devices : configures
-    devices ||--o{ telemetry : reports
-    devices ||--o{ machine_events : transitions
-    devices ||--o{ subscriptions : "watched by"
-    fleets ||--o{ busy_times : "summarized in"
-    telemetry ||--o{ telemetry_hourly : "continuous aggregate"
-    fleets {
-        text id PK
-        text name
-    }
-    device_types {
-        text id PK
-        jsonb metrics
-        jsonb config "thresholds and timers"
-    }
-    devices {
-        text id PK
-        text fleet_id FK
-        text type_id FK
-        text kind "washer or dryer"
-        jsonb config "per-device overrides"
-        timestamptz deleted_at "soft delete"
-    }
-    telemetry {
-        timestamptz time "hypertable, 90-day retention"
-        text device_id
-        text metric
-        float8 value
-    }
-    telemetry_hourly {
-        timestamptz bucket
-        text device_id
-        text metric
-        float8 avg_value
-        float8 max_value
-    }
-    machine_events {
-        bigserial id PK
-        text device_id FK
-        text from_state
-        text to_state
-        timestamptz at
-    }
-    subscriptions {
-        uuid id PK
-        text device_id FK
-        text contact "nulled after alert"
-        text status "pending, sending, sent, expired, failed"
-    }
-    busy_times {
-        text fleet_id
-        int weekday
-        int hour
-        float8 avg_running
-    }
-```
+| Decision | Chosen | Over | Why |
+|---|---|---|---|
+| Device protocol | MQTT over TLS | HTTPS POST per reading | Persistent connection, tiny per-message overhead, Last Will for offline detection |
+| Where state is decided | Server | Device | Retune without reflashing; one implementation to test |
+| What the device sends | One RMS value every 5 s | Raw samples | 1 number instead of ~500 per window, and enough to detect a running machine |
+| Delivery guarantee | At least once + dedup on `(device_id, boot, seq)` | Exactly once, or `seq > last` | Set membership survives reboots, reordering and multiple ingest replicas; `seq > last` drops valid late readings |
+| When to acknowledge | After the database commit | On receipt | Acking on receipt loses everything buffered when ingest crashes |
+| Time-series storage | TimescaleDB | InfluxDB, plain Postgres | Still Postgres (SQL, joins, transactions), plus hypertables, retention and continuous aggregates |
+| Telemetry schema | Narrow rows `(time, device, metric, value)` | A column per metric | New device types need no migration |
+| Live state | Redis, maintained by ingest | Querying Postgres per page load | The page reads a few keys, not 10,000 rows |
+| Ingest scaling | MQTT shared subscriptions | Kafka | Mosquitto supports MQTT 5 shared subscriptions; Kafka is overkill at 2,000 msg/s |
+| Device auth | Mosquitto dynamic-security plugin | Rewriting a password file and reloading | Credentials managed over MQTT, no config-file writes or container signalling |
+| Page updates | Poll every 5 s with a 2 s cache | WebSockets / SSE | Simplest, cacheable, and load is independent of viewer count |
+| Languages | Go for ingest and the load generator, Python for the API | One language | Ingest needs bounded concurrency and in-order manual acks; the API is I/O-bound glue |
+| Deployment | Docker Compose on one VM | Kubernetes | One machine handles the load; Compose is the same file locally and in production |
 
-```mermaid
-flowchart LR
-    ING["Ingest"] -->|"writes"| K1["device:{id}:latest / last_seen / lastseq"]
-    ING -->|"writes"| K2["device:{id}:state"]
-    ING -->|"publishes"| EV["events channel"]
-    APIW["API"] -->|"writes"| K3["fleet:{id}:devices<br/>ratelimit:sub:{ip}"]
-    K1 --> APIR["API reads for the page"]
-    K2 --> APIR
-    EV --> NOT["Notifier worker"]
-```
+## Status
 
-Redis is a cache with persistence off; [`storage/redis/keys.md`](storage/redis/keys.md) documents how each key rebuilds if it is wiped.
-
-### API service — [`services/api/`](services/api/) (Aly, Python)
-
-```mermaid
-flowchart TB
-    CAD["Caddy /api"] --> MW["middleware/<br/>adminauth, ratelimit"]
-    MW --> H["routes/<br/>machines, busytimes, subscriptions,<br/>admin_devices, health"]
-    H --> STO["store/<br/>postgres, redis"]
-    H -->|"register, update, revoke"| DEVS["devices/<br/>credentials, dynsec, configpush"]
-    DEVS --> MQ["Mosquitto"]
-    EV[("Redis events")] --> W["notifier/worker.py<br/>asyncio background task"]
-    CUR["notifier/cursor.py<br/>persisted catch-up over machine_events"] --> W
-    W -->|"running → finished"| CL["notifier/claim.py<br/>pending → sending"]
-    CL --> N["Notifier Protocol<br/>Web Push recommended, open"]
-    N -->|"ok"| SENT["sent, contact nulled"]
-    N -->|"fail"| RT["notifier/retry.py<br/>3 retries, then failed"]
-    W -->|"any → offline"| OA["notifier/offline_alerts.py<br/>1 h suppression"]
-    EXP["notifier/expiry.py<br/>pending > 4 h → expired"]
-    BT["busytimes/job.py<br/>nightly"] --> BTT[("busy_times")]
-```
-
-### Web page — [`web/`](web/) (Aly; Twyla writes How it works)
-
-```mermaid
-flowchart TB
-    R["main.tsx router"] --> FP["/ and /f/{fleet}<br/>FleetPage"]
-    R --> MP["/m/{id}<br/>MachinePage, QR target"]
-    R --> CP["CancelPage"]
-    R --> HW["HowItWorks"]
-    FP --> MG["MachineGrid"]
-    MG --> MC["MachineCard<br/>text label + time in state"]
-    FP --> BTC["BusyTimesChart<br/>7 × 24 heatmap"]
-    MP --> MC
-    MP --> ND["NotifyDialog"]
-    MG --> UP["usePolling<br/>5 s, paused when tab hidden"]
-    UP --> CLI["api/client.ts"]
-    ND --> CLI
-    CP -->|"POST cancel"| CLI
-    CLI -.->|"unreachable"| AB["ApiBanner"]
-```
-
-### Load generator and demo — [`tools/`](tools/) (Aly; demo shared)
-
-```mermaid
-flowchart LR
-    SEED["loadgen/seed.py<br/>register loadtest devices"] --> LMAIN["loadgen/main.go<br/>flags"]
-    LMAIN --> RAMP["ramp.go<br/>linear ramp"]
-    RAMP --> VD["device.go × N<br/>idle → 35 min wash → idle"]
-    VD --> POOL["pool.go<br/>N devices over M connections"]
-    POOL -->|"fleets/loadtest/…"| MQ["Mosquitto"]
-    MQ --> ING["Ingest"]
-    POOL -->|"published/s"| REP["report.go"]
-    ING -.->|"/metrics: stored/s, p50, p99"| REP
-    REP --> LT["docs/load-tests.md"]
-    CSV["testdata/cycles/*.csv"] --> DEMO["demo/replay.py"]
-    DEMO -->|"fleets/demo/…"| MQ
-```
-
-### Deployment, CI and observability — [`deploy/`](deploy/), [`.github/workflows/`](.github/workflows/) (Aly; Twyla owns the firmware build)
-
-```mermaid
-flowchart TB
-    subgraph VM["One VM: deploy/docker-compose.yml"]
-        CAD["proxy: Caddy :80, :443<br/>Caddyfile"] --> API["api"]
-        MQ["mosquitto :8883"] --> ING["ingest"]
-        ING --> PG[("postgres + timescaledb<br/>named volume")]
-        ING --> RD[("redis, no persistence")]
-        API --> PG
-        API --> RD
-        PROM["prometheus<br/>prometheus.yml"] -.-> ING
-        PROM -.-> API
-    end
-    CAD -->|"TLS cert"| MQ
-    PR["Pull request"] -->|"ci.yml, firmware.yml"| CI["lint, unit tests, integration test,<br/>image + firmware build"]
-    MERGE["Merge to main"] -->|"deploy.yml"| GHCR["GHCR images"]
-    GHCR -->|"deploy.sh: SSH, pull, up -d"| VM
-    PG -->|"backup/pg_dump.sh, nightly"| BK["Off-box backup"]
-    UPT["External uptime check"] -->|"/health"| CAD
-```
+| Component | State |
+|---|---|
+| Firmware | Wi-Fi with jittered exponential backoff, SNTP, ICM-20948 FIFO driver, RMS windows; MQTT publishing in progress |
+| Broker | Deployed: TLS with a Let's Encrypt certificate, per-device accounts and ACLs |
+| Ingest | Deployed: validation, crash-safe dedup, state engine, Redis live state |
+| Storage | TimescaleDB hypertable, dedup set, machine events, engine parameters |
+| Load generator | 10,000 separate device connections with Last Will and status |
+| API | Contract written; implementation in progress |
+| Web page | Planned: canvas fleet map for large fleets, card grid for the laundry room |
+| Planned next | Batched writes, "notify me when done" (Web Push), offline alerts, busy-times heatmap, benchmarks |
 
 ## Tech stack
 
 | Layer | Technology |
-| --- | --- |
-| Firmware | ESP-IDF (C) on ESP32-C6, MPU-6050 / ADXL345 accelerometer |
-| Messaging | MQTT (Mosquitto) |
-| Backend | Python (FastAPI) for the API, notifier and tooling; Go for the ingest service and load generator |
-| Storage | PostgreSQL + TimescaleDB, Redis |
-| Frontend | React |
-| Infrastructure | Docker Compose, GitHub Actions |
+|---|---|
+| Hardware | ESP32-C6, ICM-20948 IMU over I²C |
+| Firmware | C, ESP-IDF, FreeRTOS |
+| Messaging | MQTT 5, Mosquitto 2 with dynamic security |
+| Ingest | Go, `paho.golang`, `pgx`, `go-redis` |
+| API | Python, FastAPI, asyncpg, redis-py |
+| Storage | PostgreSQL 16 + TimescaleDB, Redis 7 |
+| Infrastructure | Docker Compose, Caddy (automatic HTTPS) |
 
-## Repository structure
-
-One top-level folder per high-level component; every file starts with a one-line comment saying what it is for.
+## Repository layout
 
 ```
-spincycle/
-├── hardware/            # Sensor, power, mount, wiring, enclosure, BOM, optional PCB
-├── firmware/            # ESP-IDF project for the ESP32-C6
-│   ├── main/            # accel, sensor_task, rms, mqtt_task, telemetry, offline_queue,
-│   │                    # wifi_manager, time_sync, config, secrets.h.example
-│   ├── test/            # Host-side tests for pure firmware code
-│   └── tools/           # provision.py, record_cycle.py
-├── broker/              # mosquitto.conf, topics, dynsec setup and roles, cert sync
-├── services/
-│   ├── ingest/          # Go: subscriber, decoder, registry, dedup, batchwriter,
-│   │                    # livestate, engine, sweeper, metrics
-│   └── api/             # Python: routes, middleware, store, devices, notifier, busytimes
-├── storage/             # Postgres migrations, seed data, Redis key layout
-├── web/                 # React page: pages, components, hooks, API client
-├── tools/
-│   ├── loadgen/         # Go: simulated device fleet for benchmarks
-│   └── demo/            # Replays recorded cycles into the demo fleet
-├── testdata/cycles/     # Recorded washer/dryer cycles (shared fixtures)
-├── deploy/              # docker-compose.yml, Caddyfile, Prometheus, backups, deploy script
-├── docs/                # Telemetry contract, provisioning, load-test results, ADRs
-├── .github/workflows/   # CI, deploy, firmware build
-├── go.mod               # Single Go module for ingest and loadgen
-└── .env.example
+firmware/            ESP-IDF project: sensing (accelerometer, RMS), connectivity (Wi-Fi, SNTP, telemetry),
+                     host tests and an on-board Unity test app
+broker/              mosquitto.conf, dynamic-security bootstrap and device scripts, certificate sync
+services/ingest/     Go: subscriber, decoder, registry, dedup store, state engine, live state, metrics
+services/api/        Python: FastAPI routes, Postgres and Redis stores, cache
+storage/             SQL migrations, Redis key layout
+tools/loadgen/       Go load generator and device seed data
+testdata/            Washer and dryer cycles for replay tests
+deploy/              Docker Compose, Caddy, deploy script
+docs/                Telemetry contract, API contract, load-test log, ADRs
 ```
 
-## Getting started
+Each folder has its own README with the details.
 
-**Prerequisites:** Docker and Docker Compose. For firmware: [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) and an ESP32-C6 board.
+## Running locally
+
+Requires Docker. For firmware, [ESP-IDF](https://docs.espressif.com/projects/esp-idf/) and an ESP32-C6.
 
 ```bash
-git clone https://github.com/<your-username>/spincycle.git
+git clone https://github.com/alyfarghali/spincycle.git
 cd spincycle
-docker compose -f deploy/docker-compose.yml up
+cp .env.example .env
+broker/certs/make-dev-certs.sh
+docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres redis mosquitto
+broker/dynsec/bootstrap.sh
+docker compose --env-file .env -f deploy/docker-compose.yml up -d --build ingest
 ```
 
-_Service ports and firmware flashing steps will be added as each component lands._
+Set every `change-me` in `.env` first. Then simulate devices with [`tools/loadgen`](tools/loadgen/README.md),
+or flash a board with [`firmware`](firmware/README.md).
+
+## Tests
+
+```bash
+eval "$(storage/test-db.sh | tail -1)"
+TEST_REDIS_URL=redis://localhost:6379/15 go test ./...
+firmware/test/run.sh
+```
+
+The Go tests cover the decoder against every validation rule in the contract, dedup and crash safety
+against a real Postgres, the state engine with table-driven and replay tests, Redis live state, and the
+load generator's payloads (checked with ingest's own decoder). Firmware host tests cover RMS, the
+telemetry payload and backoff.
 
 ## Message format
 
-Devices publish to:
-
-```
-fleets/{fleet_id}/devices/{device_id}/telemetry
-```
+Devices publish to `fleets/{fleet_id}/devices/{device_id}/telemetry`:
 
 ```json
 {
+  "v": 1,
   "device_id": "c6-washer-03",
+  "fw": "0.1.0",
+  "boot": 12,
   "seq": 1842,
-  "ts": "2026-10-20T14:03:11Z",
-  "metrics": { "vibration_rms": 0.42 }
+  "ts": "2026-10-20T14:03:11.250Z",
+  "metrics": { "vibration_rms": 0.0423 }
 }
 ```
 
-`seq` increases with every message, so the backend can detect duplicates and gaps. Full spec: [`docs/telemetry-contract.md`](docs/telemetry-contract.md).
-
-## Benchmarks
-
-_Coming in week 4._
-
-| Simulated devices | Messages/sec | p99 ingest latency | Hardware |
-| --- | --- | --- | --- |
-| 10,000 | TBD | TBD | TBD |
-
-## Roadmap
-
-- [ ] **Week 1:** First real sensor reading reaches the backend
-- [ ] **Week 2:** Machine state detected on a real washer; status page v1
-- [ ] **Week 3:** Deployed with HTTPS; devices installed in the laundry room
-- [ ] **Week 4:** Email notifications, offline alerts, load test, launch
-
-**Later:** web push notifications, "almost done" estimates, a second fleet on the same backend, offline buffering, OTA firmware updates.
+`boot` increments on every restart and `seq` on every message, so `(device_id, boot, seq)` identifies a
+reading even when MQTT delivers it twice or out of order. Full specification:
+[`docs/telemetry-contract.md`](docs/telemetry-contract.md).
 
 ## Privacy
 
-SpinCycle never uses cameras and stores no personal data on devices. Emails entered for "Notify me" are used only for that alert and then deleted.
-
-## Team
-
-- **[Your name](https://github.com/<you>)**: firmware, ingest pipeline, device management
-- **[Friend's name](https://github.com/<friend>)**: API, web page, notifications, deployment
-
-## License
-
-MIT
+No cameras and no personal data on devices: a sensor reports only how much a machine is shaking.

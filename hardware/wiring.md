@@ -36,6 +36,17 @@ Not connected: AD0, INT, FSYNC, and the SPI pins (CS, SDO/MISO, etc.).
 | 16, 17 | UART0 console |
 | 24-30 | Internal SPI flash |
 
+## Troubleshooting
+
+- **"no ACK at 0x69" and the scan times out at every address, but the line check reports pull-ups:**
+  the SDA/SCL wires reach the breakout (its pull-ups are what the check sees), but the signals don't
+  reach the chip. Seen Oct 21-22, 2026; a power-cycle alone didn't fix it, and it worked again after
+  the wiring was handled. TODO (Aly): note exactly what was reseated or moved.
+  Order to check: reseat the Qwiic plug at both ends, confirm SDA/SCL by the board labels, swap cable.
+- **Serial logs:** use the board's **UART** USB-C socket (`/dev/cu.usbserial-*`, CP2102N) for recordings.
+  The **USB** socket's built-in console (`/dev/cu.usbmodem*`) dropped ~2 minutes of log lines when
+  the host didn't keep up.
+
 ## Later
 
 - INT to a free GPIO (e.g. GPIO 2 or 3) if the firmware moves to FIFO watermark interrupts.

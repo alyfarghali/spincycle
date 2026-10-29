@@ -1,19 +1,33 @@
-// app_main: load config, start Wi-Fi, SNTP, sensor and MQTT tasks, arm the task watchdog.
-//
-// TEMPORARY sensor bench test: no Wi-Fi/MQTT. Prints raw samples, then one RMS per window.
-// Replace with the real startup sequence once wifi_manager and mqtt_task are wired up.
+#include "esp_event.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "nvs_flash.h"
 #include "sdkconfig.h"
 #include "accel.h"
+#include "secrets.h"
 #include "sensor_task.h"
+#include "time_sync.h"
+#include "wifi_manager.h"
 
 static const char *TAG = "main";
 
 void app_main(void)
 {
+    esp_log_level_set("wifi", ESP_LOG_WARN);  // the driver is chatty at INFO; hides our own lines
+    ESP_ERROR_CHECK(nvs_flash_init());  // Wi-Fi driver stores calibration data here
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    ESP_ERROR_CHECK(wifi_manager_start(DEV_WIFI_SSID, DEV_WIFI_PASSWORD));
+    if (!wifi_manager_wait_connected(30000)) {
+        ESP_LOGW(TAG, "no Wi-Fi after 30 s; still retrying in the background");
+    }
+    // After Wi-Fi: a request sent before there's an IP fails and SNTP waits ~30 s to retry.
+    time_sync_start();
+
     ESP_ERROR_CHECK(accel_init(CONFIG_SPINCYCLE_I2C_SDA_GPIO, CONFIG_SPINCYCLE_I2C_SCL_GPIO));
 
     // 1. Raw samples: lying flat and still, expect about x=0, y=0, z=+1 g.

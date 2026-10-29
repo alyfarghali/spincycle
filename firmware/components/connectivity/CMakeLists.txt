@@ -1,1 +1,3 @@
-# connectivity component: Wi-Fi, SNTP, MQTT task, telemetry payload, offline queue. SRCS wifi_manager.c time_sync.c mqtt_task.c telemetry.c offline_queue.c, INCLUDE_DIRS include, REQUIRES device_config sensing esp_wifi mqtt esp-tls json.
+idf_component_register(SRCS "telemetry.c" "wifi_manager.c" "time_sync.c" "backoff.c"
+                       INCLUDE_DIRS "include"
+                       PRIV_REQUIRES esp_wifi esp_netif esp_event esp_timer)

@@ -208,14 +208,3 @@ esp_err_t accel_fifo_read(accel_sample_t *out, size_t max, size_t *got)
     *got = frames;
     return ESP_OK;
 }
-
-/* my chud fifo code 
-if (read8(0x1B) & 0x1F) {
-                 reset_fifo(); 
-                 return; 
-                } // Skip this run if overflowed 
-            
-            uint16_t count = ((read8(0x70) & 0x1F) << 8) | read8(0x71);
-            int frames = count/6; // whole values only
-            //accel.read(0x72, buf, n * 6);
-            */

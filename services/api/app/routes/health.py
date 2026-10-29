@@ -1,1 +1,9 @@
-"""Health check: 200 if Postgres and Redis respond."""
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+
+router = APIRouter()
+
+
+@router.get("/health")
+async def health(request: Request) -> JSONResponse:
+    raise NotImplementedError
