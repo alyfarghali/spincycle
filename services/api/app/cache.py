@@ -11,4 +11,17 @@ class TTLCache:
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def get(self, key: str, ttl: float, load: Callable[[], Awaitable[Any]]) -> Any:
-        raise NotImplementedError
+        entry = self._entries.get(key)
+        if entry is not None and self._clock() - entry[0] < ttl:
+            return entry[1]
+
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            # Another request may have refreshed the entry while this one waited for the lock.
+            entry = self._entries.get(key)
+            if entry is not None and self._clock() - entry[0] < ttl:
+                return entry[1]
+
+            value = await load()
+            self._entries[key] = (self._clock(), value)
+            return value
