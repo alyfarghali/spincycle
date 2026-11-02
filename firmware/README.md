@@ -1,7 +1,7 @@
 # Firmware
 
 ESP-IDF v6.1 project for the ESP32-C6 sensor node. It samples an ICM-20948 accelerometer at ~102 Hz,
-reduces each ~5 s window to one `vibration_rms` value, and (when finished) publishes it over MQTT/TLS
+reduces each ~5 s window to one `vibration_rms` value, and publishes it over MQTT/TLS
 in the format defined by `docs/telemetry-contract.md`.
 
 Status legend: **done** = implemented and tested · **stub** = one-line placeholder, not written yet.
@@ -9,11 +9,12 @@ Status legend: **done** = implemented and tested · **stub** = one-line placehol
 ## How the pieces fit
 
 ```
-accel (I2C, FIFO) ──samples──▶ sensor_task ──rms_window()──▶ queue of window_t ──▶ main loop
-                                                                                   │
-              wifi_manager (connect + backoff)   telemetry_build() (JSON) ◀────────┘
-                                                        │
-                                       mqtt_task (stub) ─┴─▶ broker
+accel (I2C, FIFO) ──samples──▶ sensor_task ──rms_window()──▶ queue of window_t ──▶ mqtt_task
+                                                                                      │
+              wifi_manager (connect + backoff)   telemetry_build() (JSON) ◀───────────┤
+                                                 offline_queue (while disconnected) ◀─┤
+                                                                                      ▼
+                                                                                    broker
 ```
 
 Two FreeRTOS tasks connected by a queue: sampling never waits on the network, and a Wi-Fi outage
@@ -28,8 +29,8 @@ firmware/
   main/                  app_main: startup order only
   components/
     sensing/             accelerometer driver, RMS math, sensor task
-    connectivity/        Wi-Fi, telemetry payload, (later) SNTP, MQTT, offline queue
-    device_config/       NVS-backed settings and dev secrets
+    connectivity/        Wi-Fi, SNTP, MQTT, telemetry payload, offline queue
+    device_config/       Device settings (from secrets.h for now) and the NVS boot counter
   test/                  host-side unit tests for the pure code
   test_app/              on-board tests (separate ESP-IDF project)
   tools/                 provisioning and recording scripts (stubs)
@@ -45,24 +46,22 @@ Each component exposes only the headers in its `include/` folder. Everything els
 | File | Purpose |
 |---|---|
 | `CMakeLists.txt` | ESP-IDF project file: pulls in the IDF build system and names the image `spincycle`. |
-| `sdkconfig.defaults` | Committed settings: target `esp32c6`, and ESP-IDF's TLS certificate bundle (used to verify the broker's certificate). `sdkconfig` itself is generated from it and git-ignored. |
+| `sdkconfig.defaults` | Committed settings: target `esp32c6`; ESP-IDF's TLS certificate bundle (used to verify the broker's certificate); the "single app large" partition table (1.5 MB app, because TLS and MQTT outgrow the default 1 MB). `sdkconfig` itself is generated from it and git-ignored: delete it after changing the defaults. |
 
 ## `main/`
 
 | File | Purpose |
 |---|---|
-| `main.c` | `app_main`, the entry point ESP-IDF calls after boot. Currently a **bench build**: Wi-Fi + sensor test, printing each window. |
-| `CMakeLists.txt` | Registers `main.c`. `PRIV_INCLUDE_DIRS ../components/device_config` lets it see `secrets.h`; temporary until `config_load()` supplies credentials. |
+| `main.c` | `app_main`, the entry point ESP-IDF calls after boot: startup order only. |
+| `CMakeLists.txt` | Registers `main.c`. |
 
 ### `main.c` — `app_main(void)`
 Startup sequence, in order:
 1. Quiets the Wi-Fi driver's `"wifi"` log tag to warnings.
-2. `nvs_flash_init()`, `esp_netif_init()`, `esp_event_loop_create_default()`: shared system setup, done once here because Wi-Fi, config and MQTT all depend on it.
-3. `wifi_manager_start()` then `wifi_manager_wait_connected(30000)`; on timeout it logs and continues (Wi-Fi keeps retrying in the background). Then `time_sync_start()`.
-4. `accel_init()`, 20 raw sample prints (sanity check: flat ≈ 0, 0, +1 g).
-5. Creates an 8-slot `window_t` queue, starts `sensor_task`, then prints each window forever.
-
-Next: replace step 5's print with `telemetry_build()` + publish once `mqtt_task` exists.
+2. `nvs_flash_init()`, `esp_netif_init()`, `esp_event_loop_create_default()`: shared system setup.
+3. `config_load()`, then `config_next_boot()`. A failure is fatal: publishing with a reused boot number would make storage drop readings as duplicates.
+4. `wifi_manager_start()` then `wifi_manager_wait_connected(30000)`; on timeout it logs and continues (Wi-Fi keeps retrying in the background). Then `time_sync_start()`.
+5. `accel_init()`, an 8-slot `window_t` queue, `mqtt_task_start()`, `sensor_task_start()`.
 
 ---
 
@@ -116,8 +115,8 @@ Sample buffers (`s_x/s_y/s_z`, ~72 KB for the 60 s maximum) are `static`, not on
 
 ## `components/connectivity/`
 
-`CMakeLists.txt` registers `telemetry.c wifi_manager.c time_sync.c backoff.c`; private dependencies `esp_wifi esp_netif esp_event esp_timer`.
-Add each remaining file to `SRCS` as it's written.
+`CMakeLists.txt` registers every file below. Headers expose `window.h` and `config.h`, so `sensing` and `device_config` are public dependencies; `esp_wifi esp_netif esp_event esp_timer mbedtls` and esp-mqtt are private.
+`idf_component.yml` pins `espressif/mqtt`, which isn't part of ESP-IDF since v6; the build downloads it into `managed_components/`.
 
 ### `wifi_manager.h` / `wifi_manager.c` — station Wi-Fi · **done**, reconnect test pending
 | Function | Does |
@@ -143,9 +142,9 @@ Private:
 Private: `format_ts(tv, out)` — UTC `YYYY-MM-DDTHH:MM:SS.mmmZ` via `gmtime_r`; returns false if it didn't fit.
 `device_id` and `fw` aren't JSON-escaped because the contract limits IDs to `[a-z0-9-]`.
 
-### `offline_queue.h` / `offline_queue.c` · header done, `.c` **stub**
+### `offline_queue.h` / `offline_queue.c` · **done**, tested
 Fixed 60-slot ring buffer of `window_t` (no `malloc`) for readings taken while disconnected.
-| Function | Will do |
+| Function | Does |
 |---|---|
 | `void offline_queue_init(offline_queue_t *q)` | Empty the queue. |
 | `bool offline_queue_push(offline_queue_t *q, const window_t *w)` | Add a window, dropping the oldest when full. Returns false for a window without a valid `ts` (contract: null-ts readings aren't queued). |
@@ -158,10 +157,19 @@ Fixed 60-slot ring buffer of `window_t` (no `malloc`) for readings taken while d
 | `void time_sync_start(void)` | Starts ESP-IDF's SNTP client against `pool.ntp.org`, which keeps the clock corrected in the background. Logs `clock synced` on first sync. Call it after Wi-Fi connects: a request sent before there's an IP fails, and the retry comes ~30 s later. |
 | `bool time_sync_now(struct timeval *out)` | Fills `out` with the current time; returns false until the clock has synced (before then it reads 1970), so callers send `ts: null`. |
 
-### `mqtt_task.h` / `mqtt_task.c` · header done, `.c` **stub**
-| Function | Will do |
+### `mqtt_task.h` / `mqtt_task.c` — broker connection and publishing · **done**, not yet run on the board
+| Function | Does |
 |---|---|
-| `esp_err_t mqtt_task_start(const device_config_t *cfg, uint32_t boot, QueueHandle_t windows)` | Connect to the broker over TLS (certificate verified), set the LWT `offline`, publish `online`, subscribe to `config`; then for each window build the payload and publish at QoS 1, using the offline queue while disconnected. |
+| `esp_err_t mqtt_task_start(const device_config_t *cfg, uint32_t boot, QueueHandle_t windows)` | Copies the config, builds the three topics, starts the esp-mqtt client (contract A2: MQTT 3.1.1, client ID and username = device ID, keepalive 30 s, clean session, Last Will `offline` QoS 1 retained, TLS verified against the certificate bundle including the hostname), then starts the `mqtt_pub` task (4 KB stack, priority 5). |
+
+Private:
+- `on_event` — on connect: reset the backoff, publish `online`, subscribe to `config`, and only then allow telemetry (A2 order). On disconnect: schedule a retry with `backoff_ms`. On error: log why (refused credentials or the TLS error). On config data: log it, not applied (below).
+- `retry_cb` — timer callback that reconnects. esp-mqtt's automatic reconnect is off because it uses a fixed delay.
+- `publish_window` — builds the payload (`ts: null` until the clock is valid) and publishes at QoS 1. Returns false if it should be retried; a reading that can't be encoded is dropped.
+- `flush_offline` — peek, publish, pop, oldest first, while connected.
+- `mqtt_task` — for each window: flush the queue, then publish, or queue it if disconnected. A disconnected window without a valid `ts` is dropped (A5). The flush runs when the next window arrives, so within one period of reconnecting.
+
+Remote config (A7) isn't implemented; it's on the project's cut list. The device subscribes and logs `config`, and always uses a 5 s interval.
 
 ---
 
@@ -169,17 +177,18 @@ Fixed 60-slot ring buffer of `window_t` (no `malloc`) for readings taken while d
 
 `CMakeLists.txt` registers `config.c`, requires `nvs_flash`.
 
-### `config.h` / `config.c` · header done, `.c` **stub**
+### `config.h` / `config.c` · **done**
 - `device_config_t` — `device_id`, `fleet_id`, `mqtt_pass`, `broker_url`, `wifi_ssid`, `wifi_pass` (sized to contract maxima + NUL), `interval_s`.
 
-| Function | Will do |
+| Function | Does |
 |---|---|
-| `esp_err_t config_load(device_config_t *out)` | Read settings from NVS (written by `tools/provision.py`); Wi-Fi falls back to `secrets.h` on dev boards; refuse to start if identity is missing. |
-| `esp_err_t config_next_boot(uint32_t *boot)` | Increment the boot counter and commit it to NVS **before the first publish** (contract A4), so a crash can't reuse a boot number. |
-| `esp_err_t config_set_interval(uint16_t s)` | Store a new interval from the server (5–60 s, else ignored). |
+| `esp_err_t config_load(device_config_t *out)` | Fills the config from `secrets.h`, with a 5 s interval. Reading NVS instead (written by `tools/provision.py`) comes when there's more than one device. |
+| `esp_err_t config_next_boot(uint32_t *boot)` | Increments the boot counter (NVS namespace `spincycle`, key `boot`, starting at 1) and commits it **before the first publish** (contract A4), so a crash can't reuse a boot number. |
+
+**Don't run `idf.py erase-flash` on a deployed device.** It resets the boot counter, so new readings reuse old `(boot, seq)` pairs and storage drops them as duplicates. `idf.py flash` keeps NVS.
 
 ### `secrets.h.example` / `secrets.h`
-`DEV_WIFI_SSID`, `DEV_WIFI_PASSWORD` for dev boards. Copy the example to `secrets.h` (git-ignored). Never put the MQTT password here: one image must work on every device.
+Wi-Fi credentials and the device's identity: `DEV_DEVICE_ID`, `DEV_FLEET_ID`, `DEV_MQTT_URL`, `DEV_MQTT_PASSWORD` (from `broker/dynsec/device.sh add`). Copy the example to `secrets.h` (git-ignored). One device per build until provisioning exists.
 
 ---
 

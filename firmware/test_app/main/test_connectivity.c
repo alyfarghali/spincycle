@@ -2,6 +2,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "unity.h"
+#include "config.h"
+#include "nvs.h"
 #include "secrets.h"
 #include "time_sync.h"
 #include "wifi_manager.h"
@@ -31,8 +33,24 @@ static void test_clock_syncs_after_wifi(void)
     TEST_ASSERT_GREATER_OR_EQUAL(2026, t.tm_year + 1900);
 }
 
+static void test_boot_counter_is_committed_and_increments(void)
+{
+    uint32_t first, second, stored;
+    TEST_ASSERT_EQUAL(ESP_OK, config_next_boot(&first));
+    TEST_ASSERT_GREATER_OR_EQUAL(1, first);
+    TEST_ASSERT_EQUAL(ESP_OK, config_next_boot(&second));
+    TEST_ASSERT_EQUAL_UINT32(first + 1, second);
+
+    nvs_handle_t h;
+    TEST_ASSERT_EQUAL(ESP_OK, nvs_open("spincycle", NVS_READONLY, &h));
+    TEST_ASSERT_EQUAL(ESP_OK, nvs_get_u32(h, "boot", &stored));
+    nvs_close(h);
+    TEST_ASSERT_EQUAL_UINT32(second, stored);
+}
+
 void run_connectivity_tests(void)
 {
+    RUN_TEST(test_boot_counter_is_committed_and_increments);
     RUN_TEST(test_wifi_connects);
     RUN_TEST(test_clock_syncs_after_wifi);
 }
