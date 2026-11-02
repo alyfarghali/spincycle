@@ -12,6 +12,7 @@ firmware/**/secrets.h
 firmware/build/
 firmware/build.clang/
 firmware/managed_components/
+firmware/test_app/managed_components/
 firmware/dependencies.lock
 firmware/sdkconfig
 firmware/sdkconfig.old

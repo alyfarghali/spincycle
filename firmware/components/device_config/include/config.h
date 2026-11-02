@@ -15,4 +15,3 @@ typedef struct {
 
 esp_err_t config_load(device_config_t *out);
 esp_err_t config_next_boot(uint32_t *boot);
-esp_err_t config_set_interval(uint16_t s);

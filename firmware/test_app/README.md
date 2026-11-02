@@ -41,6 +41,7 @@ needs the clock synced first.
 | accel | `test_still_board_reads_one_g` | Mean magnitude 1 ± 0.05 g while still (scale factor, ±2 g range) |
 | accel | `test_fifo_delivers_102_hz` | FIFO sample rate 1125/11 Hz ± 3 % over 4 s |
 | accel | `test_fifo_overflow_is_reported_then_recovers` | Not draining for 1.5 s reports overflow; a reset recovers |
+| connectivity | `test_boot_counter_is_committed_and_increments` | Contract A4: each call adds 1 and the value is committed to NVS |
 | connectivity | `test_wifi_connects` | Joins the `secrets.h` network within 30 s; the connected flag stays set |
 | connectivity | `test_clock_syncs_after_wifi` | Clock invalid at boot, SNTP sync within 15 s, year ≥ 2026 |
 | sensor_task | `test_sensor_task_rejects_bad_arguments` | NULL queue, interval 0 and 61 rejected |
@@ -58,6 +59,10 @@ needs the clock synced first.
 | `test_sensor_task_windows` | Board moved during the test (RMS too high), or sensor stuck (RMS ~0) |
 
 ## Not covered here
+
+`mqtt_task` is checked by running the device firmware, because a test would publish to the real broker:
+`mqtt: connected`, then readings in Postgres. Turn the network off for a minute and back on: `mqtt` logs
+retries with backoff, and queued readings arrive with their original `ts`.
 
 Reconnect with backoff needs the network to drop: run the device firmware, turn the hotspot off for
 ~30 s and back on, and check `wifi_mgr` logs retries at ~1, 2, 4, 8 … s (± 20 %) and then reconnects,

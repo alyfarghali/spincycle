@@ -119,7 +119,7 @@ doesn't guarantee order) are stored but never move the state backwards.
 
 | Component | State |
 |---|---|
-| Firmware | Wi-Fi with jittered exponential backoff, SNTP, ICM-20948 FIFO driver, RMS windows; MQTT publishing in progress |
+| Firmware | ICM-20948 FIFO driver, RMS windows, Wi-Fi and MQTT/TLS with jittered backoff, offline queue, SNTP; on-device end-to-end run next |
 | Broker | Deployed: TLS with a Let's Encrypt certificate, per-device accounts and ACLs |
 | Ingest | Deployed: validation, crash-safe dedup, state engine, Redis live state |
 | Storage | TimescaleDB hypertable, dedup set, machine events, engine parameters |
