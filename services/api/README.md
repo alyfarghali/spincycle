@@ -72,12 +72,20 @@ The point of the cache is that 1,000 viewers polling every 5 s cause **one** Red
 200 per second. So two things matter:
 
 1. **One loader per key at a time (single-flight).** If 50 requests arrive together on an expired
-   key, only the first should call `load()`; the other 49 wait and reuse its result. Get the key's
-   lock with `self._locks.setdefault(key, asyncio.Lock())`, `async with` it, and **check the entry
-   again inside the lock**: by the time a waiter gets the lock, the first request has already
-   refreshed it.
+   key, only the first should call `load()`; the other 49 wait and reuse its result (or its error).
+   The first request starts the load as a task in `self._loading[key]`; later ones await that same
+   task. The task removes itself from `_loading` when it finishes, so `_loading` only ever holds
+   loads in progress. Await it through `asyncio.shield`: otherwise a client that disconnects cancels
+   the load for everyone else waiting on it.
 2. **Never cache a failure.** If `load()` raises, let the exception propagate and store nothing, so
    the next request tries again.
+3. **Bounded size (LRU).** Keys contain URL values (fleet IDs, the `after` cursor), so without a
+   limit anyone can grow memory by varying the URL. Entries live in an `OrderedDict` kept in
+   recency order: a hit calls `move_to_end(key)`, and storing past `max_entries` (default 1,000)
+   drops the oldest with `popitem(last=False)`. Worst case is about 1,000 × 150 KB (a 500-machine
+   page) ≈ 150 MB; normal traffic (about 100 pages × 7 state filters) fits without evicting.
+   `functools.lru_cache` doesn't fit: it's synchronous, has no TTL, and would cache the coroutine
+   object rather than its result.
 
 Use `self._clock()` for time, never `time.monotonic()` directly: tests pass a fake clock so they don't
 sleep. (Monotonic, not wall time: a clock adjustment can't make entries live forever or expire early.)
@@ -88,7 +96,10 @@ standard fix.
 **Tests** (`tests/test_cache.py`): a second `get` within the TTL doesn't call `load`; after advancing
 the fake clock past the TTL it does; 50 concurrent `get`s on one key (`asyncio.gather`, with a `load`
 that `await asyncio.sleep(0)` and counts calls) call `load` once; a `load` that raises is retried on
-the next `get`; different keys don't share entries.
+the next `get`; different keys don't share entries; with `max_entries=2`, reading `a` after `a, b`
+then storing `c` evicts `b`, not `a`; 10,000 unique keys plus failing loads leave at most
+`max_entries` entries and an empty `_loading`; 50 concurrent failing `get`s call `load` once; a
+cancelled request doesn't cancel the load another request is waiting on.
 
 ## Step 3: config, stores, errors, health, main
 
@@ -133,20 +144,21 @@ Key names are in `storage/redis/keys.md`. Write small private helpers like inges
 | `machine_not_found(device_id)` | The same for machines. |
 | `api_error_handler` | `JSONResponse({"error": exc.error, "message": exc.message}, status_code=exc.status)`. |
 | `validation_error_handler` | FastAPI answers bad query parameters with 422 and its own shape. The contract says 400 `invalid_query`, so convert: message from the first item of `exc.errors()` (its `loc` and `msg`). |
-| `unavailable_handler` | 503 `unavailable`. Log the exception (`logging.exception`) because the client message hides the cause. |
+| `unavailable_handler` | 503 `unavailable`. Log the exception because the client message hides the cause. |
+| `install(app)` | Registers the handlers for `ApiError`, `RequestValidationError` and each class in `UNAVAILABLE`, so tests can use them on a small app. |
 
 ### `app/routes/health.py`
 
 | Function | Write |
 |---|---|
-| `health` | Try `postgres.ping` and `redis.ping` **separately**, each in its own `try/except UNAVAILABLE`, so a dead Redis still reports Postgres as ok. Body as in `docs/api.md`; status 200 only if both are ok, else 503. Not cached: uptime checks must see the truth. |
+| `health` | Try `postgres.ping` and `redis.ping` **separately**, each in its own `try/except UNAVAILABLE`, so a dead Redis still reports Postgres as ok, with a 1 s limit each, so a hung database reads as down. Body as in `docs/api.md`; status 200 only if both are ok, else 503. Not cached: uptime checks must see the truth. |
 
 ### `app/main.py`
 
 | Function | Write |
 |---|---|
 | `lifespan(app)` | Before `yield`: `settings = config.load()`, then put `postgres.connect(...)`, `redis.connect(...)` and a `TTLCache()` on `app.state` (`app.state.pg`, `app.state.redis`, `app.state.cache`). After `yield`: `await pool.close()` and `await r.aclose()`. Remove the `raise`. Handlers then reach them through `request.app.state`. |
-| `create_app()` | `FastAPI(lifespan=lifespan)`; `include_router` for health, fleets, machines; `add_exception_handler` for `ApiError`, `RequestValidationError`, and each class in `UNAVAILABLE`. No gzip middleware: Caddy compresses. |
+| `create_app()` | `FastAPI(lifespan=lifespan)`; `errors.install(app)`; `include_router` for health, fleets, machines. No gzip middleware: Caddy compresses. |
 
 **Tests** (`tests/conftest.py` + `tests/test_health.py`): a fixture that sets `DATABASE_URL` and
 `REDIS_URL` from the `TEST_*` variables (skip the test if they're unset, like the Go tests), runs
@@ -189,6 +201,15 @@ first, with a key you set for `now − 1` at the end, and the current second's k
 `state` and `limit` are already validated by their type annotations (`State`, `Query(ge=1, le=500)`);
 a bad value raises `RequestValidationError`, which your handler turns into 400.
 
+`postgres.fleet` sorts with `ORDER BY id COLLATE "C"` (byte order) so its order matches Python's `<`,
+which `bisect` relies on. A locale collation like glibc `en_US` skips `-` on first comparison and puts
+`apia` before `api-dryer`; pages would then skip or repeat machines. (The Alpine-based TimescaleDB
+image happens to sort by bytes anyway, so the test can't catch a regression locally; `COLLATE "C"`
+makes it hold on any image.)
+
+`redis.live` sends all three reads per device in one pipeline: one round trip for a 500-machine page,
+not 1,500.
+
 Interview point: keyset pagination (`after=<last id>`) instead of `offset`: a page is stable while devices
 are added, and it costs the same on page 1 and page 100.
 
@@ -202,7 +223,14 @@ are added, and it costs the same on page 1 and page 100.
 |---|---|
 | `machine` | Cache 2 s under `machine:{device_id}`. `postgres.device` (`None` → `machine_not_found`), `redis.live([device_id])[0]`, `postgres.recent_events`. Return `machine_json(...)` plus `"fleet": device.fleet_id` and `"events"`. `max-age=2`. |
 
-**Tests**: 404 for unknown and for soft-deleted; `events` newest first and at most 10 (insert 12).
+An unknown ID caches `None` and raises outside the loader, like unknown fleets, so repeated bad IDs
+don't each reach Postgres (the LRU bounds how many). `recent_events` converts `at` to milliseconds in
+SQL with `floor(extract(epoch FROM at) * 1000)`: `extract` returns exact `numeric`, while a Python
+float timestamp can land on the wrong millisecond. Events order by `at DESC, id DESC`, which matches the
+`(device_id, at DESC, id DESC)` index and breaks ties between events at the same instant.
+
+**Tests**: 404 for unknown and for soft-deleted; `events` newest first and at most 10 (insert 12),
+only this device's, ties newest insert first, `.999999` s shown as `.999`.
 
 ## Step 8: run it on the server
 
