@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 
 
@@ -8,4 +9,7 @@ class Settings:
 
 
 def load() -> Settings:
-    raise NotImplementedError
+    missing = [name for name in ("DATABASE_URL", "REDIS_URL") if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError(f"missing environment variables: {', '.join(missing)}")
+    return Settings(database_url=os.environ["DATABASE_URL"], redis_url=os.environ["REDIS_URL"])

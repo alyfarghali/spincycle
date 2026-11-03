@@ -89,3 +89,57 @@ async def test_keys_are_separate():
     assert await cache.get("a", 2, load) == 1
     assert await cache.get("b", 2, load) == 2
     assert await cache.get("a", 2, load) == 1
+
+
+async def test_evicts_least_recently_used():
+    load = Loader()
+    cache = TTLCache(max_entries=2, clock=Clock())
+    await cache.get("a", 60, load)
+    await cache.get("b", 60, load)
+    await cache.get("a", 60, load)
+    await cache.get("c", 60, load)
+    assert await cache.get("a", 60, load) == 1
+    assert await cache.get("b", 60, load) == 4
+
+
+async def test_memory_stays_bounded_under_unique_keys():
+    async def fails():
+        raise OSError("redis down")
+
+    cache = TTLCache(max_entries=100, clock=Clock())
+    await asyncio.gather(*(cache.get(f"k{i}", 60, Loader()) for i in range(10000)))
+    for i in range(100):
+        with pytest.raises(OSError):
+            await cache.get(f"bad{i}", 60, fails)
+    assert len(cache._entries) == 100
+    assert cache._loading == {}
+
+
+async def test_concurrent_failure_shares_one_load():
+    calls = []
+
+    async def fails():
+        calls.append(1)
+        await asyncio.sleep(0)
+        raise OSError("redis down")
+
+    cache = TTLCache(clock=Clock())
+    results = await asyncio.gather(*(cache.get("k", 2, fails) for _ in range(50)), return_exceptions=True)
+    assert len(calls) == 1
+    assert all(isinstance(r, OSError) for r in results)
+
+
+async def test_cancelled_request_does_not_cancel_shared_load():
+    release = asyncio.Event()
+
+    async def slow():
+        await release.wait()
+        return "value"
+
+    cache = TTLCache(clock=Clock())
+    first = asyncio.create_task(cache.get("k", 2, slow))
+    second = asyncio.create_task(cache.get("k", 2, slow))
+    await asyncio.sleep(0)
+    first.cancel()
+    release.set()
+    assert await second == "value"
